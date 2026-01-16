@@ -8,7 +8,7 @@ After starting the container for the first time run `./init.sh` and `./build.sh`
 
 Relaunch the shell
 
-Run the simulation of your choice (e.g. `ros2 launch clearpath_gz simulation.launch.py setup_path:=/workspace/turtlebot4_sim_ws/husky_config slam:=true nav2:=true`)
+Run the simulation of your choice (e.g. `ros2 launch custom_simulation.launch.py setup_path:=/workspace/turtlebot4_sim_ws/husky_config slam:=true nav2:=true world:=sonoma z:=35`)
 
 Lastly, `ros2 run got_an_odd_husky controller_node`
 

@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = "got_an_odd_husky"
+package_name = "goof_an_odd_husky"
 
 setup(
     name=package_name,
@@ -19,8 +19,8 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "controller_node = got_an_odd_husky.controller_node:main",
-            "lidar_visualize = got_an_odd_husky.lidar_visualize:main",
+            "controller_node = goof_an_odd_husky.controller_node:main",
+            "lidar_visualize = goof_an_odd_husky.lidar_visualize:main",
         ],
     },
 )

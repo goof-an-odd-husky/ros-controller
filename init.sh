@@ -11,5 +11,5 @@ fi
 
 grep -qxF 'source /workspace/turtlebot4_sim_ws/ros2_ws/install/setup.bash' ~/.bashrc || \
     echo 'source /workspace/turtlebot4_sim_ws/ros2_ws/install/setup.bash' >> ~/.bashrc
-grep -qxF 'source /workspace/got-an-odd-husky/ros2_ws/install/setup.bash' ~/.bashrc || \
-    echo 'source /workspace/got-an-odd-husky/ros2_ws/install/setup.bash' >> ~/.bashrc
+grep -qxF 'source /workspace/goof-an-odd-husky/ros2_ws/install/setup.bash' ~/.bashrc || \
+    echo 'source /workspace/goof-an-odd-husky/ros2_ws/install/setup.bash' >> ~/.bashrc

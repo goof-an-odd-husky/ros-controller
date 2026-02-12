@@ -11,8 +11,10 @@
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>sensor_msgs</depend>
-  <depend>numpy</depend>
-  <depend>scipy</depend>
+  <depend>python3-numpy</depend>
+  <depend>python3-scipy</depend>
+  <depend>pyceres</depend>
+  <depend>python3-matplotlib</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

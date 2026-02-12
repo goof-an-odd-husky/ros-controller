@@ -6,6 +6,10 @@ from sensor_msgs.msg import LaserScan, NavSatFix
 from geometry_msgs.msg import TwistStamped
 import numpy as np
 import threading
+import time
+
+from .teb_planner import TEBPlanner
+from .trajectory_vizualizer import TrajectoryVisualizer
 
 
 class ControllerNode(Node):
@@ -13,7 +17,6 @@ class ControllerNode(Node):
         super().__init__("controller_node")
 
         self.sensor_callback_group = MutuallyExclusiveCallbackGroup()
-        self.control_callback_group = MutuallyExclusiveCallbackGroup()
 
         self.velocity_publisher = self.create_publisher(
             TwistStamped, "/husky/cmd_vel", 10
@@ -29,35 +32,61 @@ class ControllerNode(Node):
 
         self.gps_subscription = self.create_subscription(
             NavSatFix,
-            "/husky/sensors/gps_0/fix", 
+            "/husky/sensors/gps_0/fix",
             self.gps_callback,
             10,
             callback_group=self.sensor_callback_group,
         )
 
-        self.control_timer = self.create_timer(
-            0.1, self.control_loop, callback_group=self.control_callback_group
-        )
-
         self.latest_scan = None
         self.last_scan_time = None
-        
         self.latest_gps = None
-        
         self.data_lock = threading.Lock()
 
-        self.get_logger().info("Controller initialized with Lidar and GPS")
+        self.vizualizer = TrajectoryVisualizer(
+            x_lim=(-4, 16),
+            y_lim=(-10, 10),
+            path_render_mode="both",
+            interactive_obstacles=False,
+        )
+
+        self.local_start = [0.0, 0.0, 0.0]
+        self.local_goal = [10.0, 0.0, 0.0]
+        self.vizualizer.set_start_goal(self.local_start, self.local_goal)
+        self.planner = TEBPlanner(self.local_start, self.local_goal, 1, 1)
+        self.planner.plan()
+
+        self.get_logger().info("Controller initialized with Planner and Visualizer")
 
     def lidar_callback(self, msg):
         with self.data_lock:
             self.latest_scan = msg
             self.last_scan_time = self.get_clock().now()
-        self.get_logger().info("Lidar data received", throttle_duration_sec=2.0)
+        self.get_logger().info("Lidar data received", throttle_duration_sec=5.0)
 
     def gps_callback(self, msg):
         with self.data_lock:
             self.latest_gps = msg
-        self.get_logger().info("GPS data received", throttle_duration_sec=2.0)
+        self.get_logger().info("GPS data received", throttle_duration_sec=5.0)
+
+    def process_lidar_to_obstacles(self, scan_msg):
+        obstacles = []
+        ranges = np.array(scan_msg.ranges)
+        valid_indices = np.isfinite(ranges)
+
+        angles = scan_msg.angle_min + np.arange(len(ranges)) * scan_msg.angle_increment
+        valid_ranges = ranges[valid_indices]
+        valid_angles = angles[valid_indices]
+
+        xs = valid_ranges * np.cos(valid_angles)
+        ys = valid_ranges * np.sin(valid_angles)
+
+        radius = 0.15
+        step = 2
+        for x, y in zip(xs[::step], ys[::step]):
+            obstacles.append([x, y, radius])
+
+        return obstacles
 
     def control_loop(self):
         with self.data_lock:
@@ -65,21 +94,28 @@ class ControllerNode(Node):
             scan_time = self.last_scan_time
             gps_data = self.latest_gps
 
-        twist = TwistStamped()
-
         if scan is None:
             self.get_logger().warn("Waiting for sensors...", throttle_duration_sec=2.0)
             return
 
         scan_age = (self.get_clock().now() - scan_time).nanoseconds / 1e9
         if scan_age > 0.5:
-            self.get_logger().error(
-                "Lidar data stale, stopping", throttle_duration_sec=1.0
-            )
-            twist.twist.linear.x = 0.0
-            twist.twist.angular.z = 0.0
-            self.velocity_publisher.publish(twist)
+            self.get_logger().error("Lidar data stale, stopping", throttle_duration_sec=1.0)
             return
+
+        detected_obstacles = self.process_lidar_to_obstacles(scan)
+
+        if self.vizualizer.is_open:
+            self.vizualizer.set_obstacles(detected_obstacles)
+
+            obstacle_data = self.vizualizer.get_obstacles()
+            self.planner.update_obstacles(obstacle_data)
+            self.planner.refine()
+            trajectory = self.planner.get_trajectory()
+
+            self.vizualizer.update_trajectory(trajectory)
+
+            self.vizualizer.draw()
 
         if gps_data:
             if gps_data.status.status >= 0:
@@ -90,11 +126,6 @@ class ControllerNode(Node):
             else:
                 self.get_logger().warn("GPS received but no fix acquired", throttle_duration_sec=2.0)
 
-        twist.twist.linear.x = 1.0
-        twist.twist.angular.z = 0.4 
-
-        self.velocity_publisher.publish(twist)
-
 
 def main(args=None):
     rclpy.init(args=args)
@@ -104,8 +135,16 @@ def main(args=None):
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(controller_node)
 
+    spin_thread = threading.Thread(target=executor.spin, daemon=True)
+    spin_thread.start()
+
     try:
-        executor.spin()
+        while rclpy.ok():
+            controller_node.control_loop()
+            time.sleep(
+                0.1
+            )  # better have a timer, but matplotlib doesn't work on a different thread well. Need to fix later
+
     except KeyboardInterrupt:
         pass
     finally:

@@ -1,10 +1,13 @@
+from goof_an_odd_husky.helpers import gps_to_vector
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from sensor_msgs.msg import LaserScan, NavSatFix
+from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TwistStamped
 import numpy as np
+from scipy.spatial.transform import Rotation
 import threading
 import time
 
@@ -38,22 +41,36 @@ class ControllerNode(Node):
             callback_group=self.sensor_callback_group,
         )
 
+        self.odom_subscription = self.create_subscription(
+            Odometry,
+            "/husky/platform/odom/filtered",
+            self.odom_callback,
+            10,
+            callback_group=self.sensor_callback_group,
+        )
+
+        self.latest_odom = None
+        self.last_processed_odom = None
+
         self.latest_scan = None
         self.last_scan_time = None
         self.latest_gps = None
-        self.data_lock = threading.Lock()
+        self.first_gps = None
+        self.data_lock: threading.Lock = threading.Lock()
 
-        self.vizualizer = TrajectoryVisualizer(
-            x_lim=(-4, 16),
-            y_lim=(-10, 10),
+        self.visualizer: TrajectoryVisualizer = TrajectoryVisualizer(
+            x_lim=(-10, 10),
+            y_lim=(-4, 16),
             path_render_mode="both",
             interactive_obstacles=False,
         )
 
-        self.local_start = [0.0, 0.0, 0.0]
-        self.local_goal = [10.0, 0.0, 0.0]
-        self.vizualizer.set_start_goal(self.local_start, self.local_goal)
-        self.planner = TEBPlanner(self.local_start, self.local_goal, 1, 1)
+        self.initial_start: list[float] = [0.0, 0.0, 0.0]
+        self.initial_goal: list[float] = [10.0, 0.0, 0.0]
+        self.visualizer.set_start_goal(self.initial_start, self.initial_goal)
+        self.planner: TEBPlanner = TEBPlanner(
+            self.initial_start, self.initial_goal, 1, 1
+        )
         self.planner.plan()
 
         self.get_logger().info("Controller initialized with Planner and Visualizer")
@@ -67,7 +84,50 @@ class ControllerNode(Node):
     def gps_callback(self, msg):
         with self.data_lock:
             self.latest_gps = msg
+            if not self.first_gps:
+                self.first_gps = msg
         self.get_logger().info("GPS data received", throttle_duration_sec=5.0)
+
+    def odom_callback(self, msg):
+        with self.data_lock:
+            self.latest_odom = msg
+
+    def get_odom_delta(self, curr, prev):
+        """Calculate the movement of the robot in the ROBOT frame"""
+        if prev is None:
+            return 0.0, 0.0, 0.0
+
+        curr_pos = curr.pose.pose.position
+        prev_pos = prev.pose.pose.position
+
+        curr_yaw = Rotation.from_quat(
+            [
+                curr.pose.pose.orientation.x,
+                curr.pose.pose.orientation.y,
+                curr.pose.pose.orientation.z,
+                curr.pose.pose.orientation.w,
+            ]
+        ).as_euler("zyx")[0]
+        prev_yaw = Rotation.from_quat(
+            [
+                prev.pose.pose.orientation.x,
+                prev.pose.pose.orientation.y,
+                prev.pose.pose.orientation.z,
+                prev.pose.pose.orientation.w,
+            ]
+        ).as_euler("zyx")[0]
+
+        dx_global = curr_pos.x - prev_pos.x
+        dy_global = curr_pos.y - prev_pos.y
+        dtheta = curr_yaw - prev_yaw
+
+        c = np.cos(prev_yaw)
+        s = np.sin(prev_yaw)
+
+        dx_local = dx_global * c + dy_global * s
+        dy_local = -dx_global * s + dy_global * c
+
+        return dx_local, dy_local, dtheta
 
     def process_lidar_to_obstacles(self, scan_msg):
         obstacles = []
@@ -86,45 +146,79 @@ class ControllerNode(Node):
         for x, y in zip(xs[::step], ys[::step]):
             obstacles.append([x, y, radius])
 
-        return obstacles
+        return np.array(obstacles)
 
     def control_loop(self):
         with self.data_lock:
             scan = self.latest_scan
             scan_time = self.last_scan_time
             gps_data = self.latest_gps
+            odom = self.latest_odom
 
         if scan is None:
-            self.get_logger().warn("Waiting for sensors...", throttle_duration_sec=2.0)
+            self.get_logger().warn("Waiting for LIDAR...", throttle_duration_sec=2.0)
             return
+
+        if odom is None:
+            self.get_logger().warn("Waiting for Odometry...", throttle_duration_sec=2.0)
+            return
+
+        dx, dy, dtheta = self.get_odom_delta(odom, self.last_processed_odom)
+
+        if self.last_processed_odom is not None:
+            self.planner.transform_trajectory(dx, dy, dtheta)
+
+        self.last_processed_odom = odom
+
+        if gps_data and gps_data.status.status >= 0:
+            displacement = gps_to_vector(
+                self.first_gps.latitude,
+                self.first_gps.longitude,
+                gps_data.latitude,
+                gps_data.longitude,
+            )
+
+            goal_x_global = self.initial_goal[0] - displacement[0]
+            goal_y_global = self.initial_goal[1] - displacement[1]
+
+            current_yaw = Rotation.from_quat(
+                [
+                    odom.pose.pose.orientation.x,
+                    odom.pose.pose.orientation.y,
+                    odom.pose.pose.orientation.z,
+                    odom.pose.pose.orientation.w,
+                ]
+            ).as_euler("zyx")[0]
+
+            c = np.cos(-current_yaw)
+            s = np.sin(-current_yaw)
+
+            local_goal_x = goal_x_global * c - goal_y_global * s
+            local_goal_y = goal_x_global * s + goal_y_global * c
+
+            local_goal = [local_goal_x, local_goal_y]
+
+            self.planner.move_goal([local_goal_x, local_goal_y], [0.0], 0.5, 5.0)
+
+            if self.visualizer.is_open:
+                self.visualizer.set_start_goal(self.initial_start, local_goal)
 
         scan_age = (self.get_clock().now() - scan_time).nanoseconds / 1e9
         if scan_age > 0.5:
-            self.get_logger().error("Lidar data stale, stopping", throttle_duration_sec=1.0)
+            self.get_logger().error(
+                "Lidar data stale, stopping", throttle_duration_sec=1.0
+            )
             return
 
         detected_obstacles = self.process_lidar_to_obstacles(scan)
+        self.planner.update_obstacles(detected_obstacles)
+        self.planner.refine()
+        trajectory = self.planner.get_trajectory()
 
-        if self.vizualizer.is_open:
-            self.vizualizer.set_obstacles(detected_obstacles)
-
-            obstacle_data = self.vizualizer.get_obstacles()
-            self.planner.update_obstacles(obstacle_data)
-            self.planner.refine()
-            trajectory = self.planner.get_trajectory()
-
-            self.vizualizer.update_trajectory(trajectory)
-
-            self.vizualizer.draw()
-
-        if gps_data:
-            if gps_data.status.status >= 0:
-                self.get_logger().info(
-                    f"Current Loc: Lat: {gps_data.latitude:.5f}, Lon: {gps_data.longitude:.5f}",
-                    throttle_duration_sec=1.0
-                )
-            else:
-                self.get_logger().warn("GPS received but no fix acquired", throttle_duration_sec=2.0)
+        if self.visualizer.is_open:
+            self.visualizer.set_obstacles(detected_obstacles)
+            self.visualizer.update_trajectory(trajectory)
+            self.visualizer.draw()
 
 
 def main(args=None):
@@ -139,7 +233,7 @@ def main(args=None):
     spin_thread.start()
 
     try:
-        while rclpy.ok():
+        while rclpy.ok() and controller_node.visualizer.is_open:
             controller_node.control_loop()
             time.sleep(
                 0.1

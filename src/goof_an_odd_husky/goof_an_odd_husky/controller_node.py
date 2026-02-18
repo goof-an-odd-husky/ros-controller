@@ -9,7 +9,9 @@ from geometry_msgs.msg import TwistStamped
 import numpy as np
 from scipy.spatial.transform import Rotation
 import threading
-import time
+
+import pyqtgraph as pg
+from pyqtgraph.Qt import QtCore
 
 from .teb_planner import TEBPlanner
 from .trajectory_vizualizer import TrajectoryVisualizer
@@ -20,6 +22,7 @@ class ControllerNode(Node):
         super().__init__("controller_node")
 
         self.sensor_callback_group = MutuallyExclusiveCallbackGroup()
+        self.control_callback_group = MutuallyExclusiveCallbackGroup()
 
         self.velocity_publisher = self.create_publisher(
             TwistStamped, "/husky/cmd_vel", 10
@@ -49,6 +52,10 @@ class ControllerNode(Node):
             callback_group=self.sensor_callback_group,
         )
 
+        self.control_timer = self.create_timer(
+            0.1, self.control_loop, callback_group=self.control_callback_group
+        )
+
         self.latest_odom = None
         self.last_processed_odom = None
 
@@ -57,6 +64,11 @@ class ControllerNode(Node):
         self.latest_gps = None
         self.first_gps = None
         self.data_lock: threading.Lock = threading.Lock()
+
+        self.pending_trajectory = None
+        self.pending_obstacles = None
+        self.pending_start_goal = None
+        self.viz_lock: threading.Lock = threading.Lock()
 
         self.visualizer: TrajectoryVisualizer = TrajectoryVisualizer(
             x_lim=(-10, 10),
@@ -93,7 +105,6 @@ class ControllerNode(Node):
             self.latest_odom = msg
 
     def get_odom_delta(self, curr, prev):
-        """Calculate the movement of the robot in the ROBOT frame"""
         if prev is None:
             return 0.0, 0.0, 0.0
 
@@ -130,7 +141,6 @@ class ControllerNode(Node):
         return dx_local, dy_local, dtheta
 
     def process_lidar_to_obstacles(self, scan_msg):
-        obstacles = []
         ranges = np.array(scan_msg.ranges)
         valid_indices = np.isfinite(ranges)
 
@@ -143,8 +153,7 @@ class ControllerNode(Node):
 
         radius = 0.15
         step = 2
-        for x, y in zip(xs[::step], ys[::step]):
-            obstacles.append([x, y, radius])
+        obstacles = [[x, y, radius] for x, y in zip(xs[::step], ys[::step])]
 
         return np.array(obstacles)
 
@@ -170,6 +179,7 @@ class ControllerNode(Node):
 
         self.last_processed_odom = odom
 
+        pending_start_goal = None
         if gps_data and gps_data.status.status >= 0:
             displacement = gps_to_vector(
                 self.first_gps.latitude,
@@ -197,11 +207,8 @@ class ControllerNode(Node):
             local_goal_y = goal_x_global * s + goal_y_global * c
 
             local_goal = [local_goal_x, local_goal_y]
-
             self.planner.move_goal([local_goal_x, local_goal_y], [0.0], 0.5, 5.0)
-
-            if self.visualizer.is_open:
-                self.visualizer.set_start_goal(self.initial_start, local_goal)
+            pending_start_goal = (self.initial_start, local_goal)
 
         scan_age = (self.get_clock().now() - scan_time).nanoseconds / 1e9
         if scan_age > 0.5:
@@ -215,10 +222,35 @@ class ControllerNode(Node):
         self.planner.refine()
         trajectory = self.planner.get_trajectory()
 
-        if self.visualizer.is_open:
-            self.visualizer.set_obstacles(detected_obstacles)
+        with self.viz_lock:
+            self.pending_obstacles = detected_obstacles
+            self.pending_trajectory = trajectory
+            if pending_start_goal is not None:
+                self.pending_start_goal = pending_start_goal
+
+    def render_loop(self):
+        if not self.visualizer.is_open:
+            return
+
+        with self.viz_lock:
+            trajectory = self.pending_trajectory
+            obstacles = self.pending_obstacles
+            start_goal = self.pending_start_goal
+            self.pending_trajectory = None
+            self.pending_obstacles = None
+            self.pending_start_goal = None
+
+        if trajectory is None and obstacles is None:
+            return
+
+        if start_goal is not None:
+            self.visualizer.set_start_goal(*start_goal)
+        if obstacles is not None:
+            self.visualizer.set_obstacles(obstacles)
+        if trajectory is not None:
             self.visualizer.update_trajectory(trajectory)
-            self.visualizer.draw()
+
+        self.visualizer.draw()
 
 
 def main(args=None):
@@ -232,13 +264,12 @@ def main(args=None):
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
-    try:
-        while rclpy.ok() and controller_node.visualizer.is_open:
-            controller_node.control_loop()
-            time.sleep(
-                0.1
-            )  # better have a timer, but matplotlib doesn't work on a different thread well. Need to fix later
+    qt_timer = QtCore.QTimer()
+    qt_timer.timeout.connect(controller_node.render_loop)
+    qt_timer.start(100)
 
+    try:
+        pg.exec()
     except KeyboardInterrupt:
         pass
     finally:

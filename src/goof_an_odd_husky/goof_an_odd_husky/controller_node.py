@@ -1,4 +1,6 @@
-from goof_an_odd_husky.helpers import gps_to_vector
+from numpy.typing import NDArray
+from typing import Annotated
+from goof_an_odd_husky.helpers import gps_to_vector, normalize_angle
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
@@ -86,6 +88,7 @@ class ControllerNode(Node):
         self.planner.plan()
 
         self.get_logger().info("Controller initialized with Planner and Visualizer")
+        self.last_time_ns = self.get_clock().now().nanoseconds
 
     def lidar_callback(self, msg):
         with self.data_lock:
@@ -157,6 +160,39 @@ class ControllerNode(Node):
 
         return np.array(obstacles)
 
+    def trajectory_to_action(
+        self, trajectory: Annotated[NDArray[np.float64], (None, 4)]
+    ) -> tuple[float, float]:
+        if trajectory is None or len(trajectory) < 2:
+            return 0.0, 0.0
+
+        x1, y1, th1, dt = trajectory[0]
+        x2, y2, th2, _ = trajectory[1]
+
+        if dt < 1e-3:
+            return 0.0, 0.0
+
+        dx = x2 - x1
+        dy = y2 - y1
+
+        c, s = np.cos(th1), np.sin(th1)
+        direction = 1.0
+        if (dx * c + dy * s) < 0:
+            direction = -1.0
+
+        chord = np.hypot(dx, dy)
+        arc_angle = normalize_angle(th2 - th1)
+        if abs(arc_angle) < 1e-5:
+            arc_length = chord
+        else:
+            circle_radius = chord / (2 * np.sin(arc_angle / 2))
+            arc_length = circle_radius * arc_angle
+
+        v = direction * abs(arc_length) / dt
+        omega = arc_angle / dt
+
+        return v, omega
+
     def control_loop(self):
         with self.data_lock:
             scan = self.latest_scan
@@ -221,6 +257,16 @@ class ControllerNode(Node):
         self.planner.update_obstacles(detected_obstacles)
         self.planner.refine()
         trajectory = self.planner.get_trajectory()
+
+        v, omega = self.trajectory_to_action(trajectory)
+        twist_stamped_message = TwistStamped()
+        twist_stamped_message.twist.linear.x = v
+        twist_stamped_message.twist.angular.z = omega
+        self.velocity_publisher.publish(twist_stamped_message)
+        now = self.get_clock().now()
+        current_time_ns = now.nanoseconds
+        print((current_time_ns - self.last_time_ns) / 1e9)
+        self.last_time_ns = current_time_ns
 
         with self.viz_lock:
             self.pending_obstacles = detected_obstacles

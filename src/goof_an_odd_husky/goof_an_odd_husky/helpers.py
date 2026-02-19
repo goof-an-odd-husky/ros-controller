@@ -1,4 +1,10 @@
 import math
+import numpy as np
+
+
+def normalize_angle(angle: float) -> float:
+    """Normalize an angle to the range [-pi, pi]."""
+    return (angle + np.pi) % (2 * np.pi) - np.pi
 
 
 def gps_to_vector(
@@ -18,19 +24,14 @@ def gps_to_vector(
             - x = East displacement (meters)
             - y = North displacement (meters)
     """
-    R = 6_371_000  # mean R
+    R = 6_371_000  # mean R of Earth
 
     lat1_rad = math.radians(lat1)
-    delta_lat = math.radians(lat2 - lat1)
-    delta_lon = math.radians(lon2 - lon1)
 
-    if delta_lon > math.pi:
-        delta_lon -= 2 * math.pi
-    elif delta_lon < -math.pi:
-        delta_lon += 2 * math.pi
+    delta_lat = math.radians(lat2 - lat1)
+    delta_lon = normalize_angle(math.radians(lon2 - lon1))
 
     y = R * delta_lat
-
     x = R * delta_lon * math.cos(lat1_rad)
 
     return x, y

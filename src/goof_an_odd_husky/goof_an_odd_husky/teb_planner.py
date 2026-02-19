@@ -1,3 +1,4 @@
+from goof_an_odd_husky.helpers import normalize_angle
 from typing import override
 from .trajectory_planner import TrajectoryPlanner
 import numpy as np
@@ -6,20 +7,6 @@ import pyceres
 
 
 DT_MIN = 0.01
-
-
-def upper_bound(value: float, limit: float, weight: float):
-    error = value - limit
-    if error < 0:
-        return 0.0
-    return weight * error**2
-
-
-def lower_bound(value: float, limit: float, weight: float):
-    error = limit - value
-    if error < 0:
-        return 0.0
-    return weight * error**2
 
 
 class SegmentObstaclesCost(pyceres.CostFunction):
@@ -106,17 +93,22 @@ class SegmentVelocityCost(pyceres.CostFunction):
         A_x, A_y = parameters[0]
         B_x, B_y = parameters[1]
         dt = parameters[2][0]
+        if abs(dt) < 1e-9:
+            return False
+        inv_dt = 1 / dt
 
         AB_x = B_x - A_x
         AB_y = B_y - A_y
         AB_len = np.sqrt(AB_x**2 + AB_y**2 + 1e-10)
 
-        v = AB_len / dt
+        v = AB_len * inv_dt
+
+        diff = 0
+        if v > self.max_v:
+            diff = v - self.max_v
 
         w = self.weight
-        residuals[:] = upper_bound(
-            v, self.max_v, w
-        )  # todo: into builtin upper bound? also do angular?
+        residuals[0] = w * diff
 
         if jacobians is not None:
             if v < self.max_v:
@@ -128,9 +120,7 @@ class SegmentVelocityCost(pyceres.CostFunction):
                     jacobians[2][0] = 0.0
                 return True
 
-            # r = w * (v - max_v)^2
-            dr_dv = 2 * w * (v - self.max_v)
-
+            dr_dv = w
             scale = dr_dv / (AB_len * dt)
 
             if jacobians[0] is not None:
@@ -143,8 +133,62 @@ class SegmentVelocityCost(pyceres.CostFunction):
 
             if jacobians[2] is not None:
                 # dv/dt = -AB_len / dt^2 = -v / dt
-                dv_dt = -v / dt
+                dv_dt = -v * inv_dt
                 jacobians[2][0] = dr_dv * dv_dt
+
+        return True
+
+
+class SegmentAngularVelocityCost(pyceres.CostFunction):
+    def __init__(self, weight: float, max_omega: float):
+        super().__init__()
+        self.weight = weight
+        self.max_omega = max_omega
+
+        self.set_num_residuals(1)
+        self.set_parameter_block_sizes([1, 1, 1])
+
+    def Evaluate(self, parameters, residuals, jacobians):
+        A_theta = parameters[0][0]
+        B_theta = parameters[1][0]
+        dt = parameters[2][0]
+        if abs(dt) < 1e-9:
+            return False
+        inv_dt = 1 / dt
+
+        delta_theta = normalize_angle(B_theta - A_theta)
+
+        omega = delta_theta * inv_dt
+
+        diff = 0
+        if omega > self.max_omega:
+            diff = omega - self.max_omega
+        elif omega < -self.max_omega:
+            diff = omega + self.max_omega
+
+        w = self.weight
+        residuals[0] = w * diff
+
+        if jacobians is not None:
+            if omega < self.max_omega:
+                if jacobians[0] is not None:
+                    jacobians[0][0] = 0.0
+                if jacobians[1] is not None:
+                    jacobians[1][0] = 0.0
+                if jacobians[2] is not None:
+                    jacobians[2][0] = 0.0
+                return True
+
+            dr_ddelta_theta = w * inv_dt
+
+            if jacobians[0] is not None:
+                jacobians[0][0] = -dr_ddelta_theta
+
+            if jacobians[1] is not None:
+                jacobians[1][0] = dr_ddelta_theta
+
+            if jacobians[2] is not None:
+                jacobians[2][0] = -w * omega * inv_dt
 
         return True
 
@@ -258,8 +302,10 @@ class SegmentAngularSmoothingCost(pyceres.CostFunction):
         theta1 = parameters[0][0]
         theta2 = parameters[1][0]
         dt = parameters[2][0]
+        if abs(dt) < 1e-9:
+            return False
 
-        delta_theta = (theta2 - theta1 + np.pi) % (2 * np.pi) - np.pi
+        delta_theta = normalize_angle(theta2 - theta1)
 
         omega = delta_theta / dt
 
@@ -405,21 +451,24 @@ class TEBPlanner(TrajectoryPlanner):
             if self.optimization_dt:
                 self.optimization_dt.pop(0)
             return
-            
+
         self.optimization_xy[0][:] = new_xy
         self.optimization_theta[0][:] = new_theta
-        
+
         if distance > max_distance:
             point1_xy = self.optimization_xy[1]
             self.optimization_xy.insert(
-                1, np.array([(new_xy[0] + point1_xy[0]) / 2, (new_xy[1] + point1_xy[1]) / 2])
+                1,
+                np.array(
+                    [(new_xy[0] + point1_xy[0]) / 2, (new_xy[1] + point1_xy[1]) / 2]
+                ),
             )
 
             point1_theta = self.optimization_theta[1]
-            diff = (point1_theta - new_theta + np.pi) % (2 * np.pi) - np.pi
-            mean_theta = (new_theta + diff / 2) % (2 * np.pi)
+            diff = normalize_angle(point1_theta - new_theta)
+            mean_theta = normalize_angle(new_theta.item() + diff / 2)
             self.optimization_theta.insert(1, mean_theta)
-            
+
             half_dt = self.optimization_dt[0] / 2
             self.optimization_dt[0] = half_dt
             self.optimization_dt.insert(1, half_dt)
@@ -448,7 +497,7 @@ class TEBPlanner(TrajectoryPlanner):
             self.optimization_theta.pop(-1)
             if self.optimization_dt:
                 self.optimization_dt.pop(-1)
-            
+
             self.optimization_xy[-1][:] = new_xy
             self.optimization_theta[-1][:] = new_theta
             return
@@ -458,15 +507,17 @@ class TEBPlanner(TrajectoryPlanner):
 
         if distance > max_distance:
             prev_xy = self.optimization_xy[-2]
-            mid_xy = np.array([(new_xy[0] + prev_xy[0]) / 2, (new_xy[1] + prev_xy[1]) / 2])
-            
+            mid_xy = np.array(
+                [(new_xy[0] + prev_xy[0]) / 2, (new_xy[1] + prev_xy[1]) / 2]
+            )
+
             prev_theta = self.optimization_theta[-2]
-            diff = (prev_theta - new_theta + np.pi) % (2 * np.pi) - np.pi
-            mean_theta = (new_theta + diff / 2) % (2 * np.pi)
+            diff = normalize_angle(prev_theta - new_theta)
+            mean_theta = normalize_angle(new_theta.item() + diff / 2)
 
             self.optimization_xy.insert(-1, mid_xy)
             self.optimization_theta.insert(-1, mean_theta)
-            
+
             half_dt = self.optimization_dt[-1] / 2
             self.optimization_dt[-1] = half_dt
             self.optimization_dt.insert(-1, half_dt)
@@ -475,7 +526,7 @@ class TEBPlanner(TrajectoryPlanner):
         """
         Transforms the internal trajectory guess to account for robot motion.
         This keeps the trajectory aligned with the world while the robot frame moves.
-        
+
         Args:
             dx, dy: Change in robot position relative to the previous frame's frame.
             dtheta: Change in robot heading.
@@ -488,19 +539,19 @@ class TEBPlanner(TrajectoryPlanner):
         rot_mat = np.array([[c, -s], [s, c]])
 
         translation = np.array([dx, dy])
-        
+
         for i in range(len(self.optimization_xy)):
             p_old = self.optimization_xy[i]
-            
+
             p_shifted = p_old - translation
-            
+
             p_new = rot_mat @ p_shifted
-            
+
             self.optimization_xy[i][:] = p_new
 
         for i in range(len(self.optimization_theta)):
             th_old = self.optimization_theta[i][0]
-            th_new = (th_old - dtheta + np.pi) % (2 * np.pi) - np.pi
+            th_new = normalize_angle(th_old - dtheta)
             self.optimization_theta[i][:] = np.array([th_new])
 
         self.optimization_xy[0][:] = np.array([0.0, 0.0])
@@ -521,6 +572,10 @@ class TEBPlanner(TrajectoryPlanner):
         velocity_cost = SegmentVelocityCost(
             weight=10.0,
             max_v=self.max_v,
+        )
+        angular_velocity_cost = SegmentAngularVelocityCost(
+            weight=5.0,
+            max_omega=self.max_v / 2,
         )
         kinematic_cost = SegmentKinematicsCost(
             weight=10.0,
@@ -547,6 +602,9 @@ class TEBPlanner(TrajectoryPlanner):
 
             problem.add_residual_block(obstacle_cost, None, [xy_curr, xy_next])
             problem.add_residual_block(velocity_cost, None, [xy_curr, xy_next, dt])
+            problem.add_residual_block(
+                angular_velocity_cost, None, [theta_curr, theta_next, dt]
+            )
             problem.add_residual_block(
                 kinematic_cost, None, [xy_curr, theta_curr, xy_next, theta_next]
             )

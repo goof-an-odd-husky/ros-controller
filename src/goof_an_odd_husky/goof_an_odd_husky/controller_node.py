@@ -265,10 +265,11 @@ class ControllerNode(Node):
         self.velocity_publisher.publish(twist_stamped_message)
         now = self.get_clock().now()
         current_time_ns = now.nanoseconds
-        print((current_time_ns - self.last_time_ns) / 1e9)
+        print((current_time_ns - self.last_time_ns) / 1e9, len(detected_obstacles))
         self.last_time_ns = current_time_ns
 
         with self.viz_lock:
+            self.pending_obstacles = detected_obstacles[::5]
             self.pending_obstacles = detected_obstacles
             self.pending_trajectory = trajectory
             if pending_start_goal is not None:

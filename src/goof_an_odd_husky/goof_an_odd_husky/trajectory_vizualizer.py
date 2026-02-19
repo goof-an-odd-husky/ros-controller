@@ -17,24 +17,31 @@ _CIRCLE_SIN = np.sin(_CIRCLE_THETA)
 
 
 def _build_obstacle_polylines(
-    obstacles: list[list[float]],
-) -> tuple[list[float], list[float]]:
-    xs, ys = [], []
-    for ox, oy, r in obstacles:
-        xs.extend(ox + r * _CIRCLE_COS)
-        xs.append(np.nan)
-        ys.extend(oy + r * _CIRCLE_SIN)
-        ys.append(np.nan)
+    obstacles: NDArray[np.floating],
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
+    if len(obstacles) == 0:
+        return np.array([]), np.array([])
+    n = len(obstacles)
+    ox = obstacles[:, 0:1]
+    oy = obstacles[:, 1:2]
+    r = obstacles[:, 2:3]
+    circle_x = ox + r * _CIRCLE_COS
+    circle_y = oy + r * _CIRCLE_SIN
+    nan_col = np.full((n, 1), np.nan)
+    xs = np.hstack([circle_x, nan_col]).ravel()
+    ys = np.hstack([circle_y, nan_col]).ravel()
     return xs, ys
 
 
 def _build_arrow_segments(
     poses: NDArray[np.floating], arrow_length: float = 0.3
-) -> tuple[list[float], list[float]]:
-    xs, ys = [], []
-    for x, y, theta, *_ in poses:
-        xs += [x, x + arrow_length * np.cos(theta), np.nan]
-        ys += [y, y + arrow_length * np.sin(theta), np.nan]
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
+    n = len(poses)
+    nan_col = np.full(n, np.nan)
+    tip_x = poses[:, 0] + arrow_length * np.cos(poses[:, 2])
+    tip_y = poses[:, 1] + arrow_length * np.sin(poses[:, 2])
+    xs = np.column_stack([poses[:, 0], tip_x, nan_col]).ravel()
+    ys = np.column_stack([poses[:, 1], tip_y, nan_col]).ravel()
     return xs, ys
 
 
@@ -180,19 +187,10 @@ class TrajectoryVisualizer:
         self._start_item.setData([sx], [sy])
         self._goal_item.setData([gx], [gy])
 
-    def set_obstacles(
-        self, obstacles: list[list[float]] | NDArray[np.floating]
-    ) -> None:
+    def set_obstacles(self, obstacles: NDArray[np.floating]) -> None:
         if not self._is_open:
             return
-        self.obstacles = [
-            [
-                float(o[0]),
-                float(o[1]),
-                float(o[2]) if len(o) >= 3 else self.obstacle_radius,
-            ]
-            for o in obstacles
-        ]
+        self._obstacles_array = np.asarray(obstacles, dtype=np.float64)
         self._redraw_obstacles()
 
     def update_trajectory(self, poses: NDArray[np.floating] | None) -> None:
@@ -227,18 +225,12 @@ class TrajectoryVisualizer:
         self._app.processEvents()
 
     def _redraw_obstacles(self) -> None:
-        if not self.obstacles:
+        obs = getattr(self, "_obstacles_array", None)
+        if obs is None or len(obs) == 0:
             self._obstacle_item.setData([], [])
             return
-        self.obstacles = [
-            [
-                -float(o[1]),
-                float(o[0]),
-                float(o[2]) if len(o) >= 3 else self.obstacle_radius,
-            ]
-            for o in self.obstacles
-        ]
-        xs, ys = _build_obstacle_polylines(self.obstacles)
+        canvas_obs = np.column_stack([-obs[:, 1], obs[:, 0], obs[:, 2]])
+        xs, ys = _build_obstacle_polylines(canvas_obs)
         self._obstacle_item.setData(xs, ys)
 
     def _on_mouse_clicked(self, event) -> None:

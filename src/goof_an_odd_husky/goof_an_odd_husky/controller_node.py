@@ -208,6 +208,10 @@ class ControllerNode(Node):
             self.get_logger().warn("Waiting for Odometry...", throttle_duration_sec=2.0)
             return
 
+        if gps_data is None:
+            self.get_logger().warn("Waiting for GPS...", throttle_duration_sec=2.0)
+            return
+
         dx, dy, dtheta = self.get_odom_delta(odom, self.last_processed_odom)
 
         if self.last_processed_odom is not None:
@@ -216,35 +220,38 @@ class ControllerNode(Node):
         self.last_processed_odom = odom
 
         pending_start_goal = None
-        if gps_data and gps_data.status.status >= 0:
-            displacement = gps_to_vector(
-                self.first_gps.latitude,
-                self.first_gps.longitude,
-                gps_data.latitude,
-                gps_data.longitude,
-            )
+        if gps_data:
+            if gps_data.status.status >= 0:
+                displacement = gps_to_vector(
+                    self.first_gps.latitude,
+                    self.first_gps.longitude,
+                    gps_data.latitude,
+                    gps_data.longitude,
+                )
 
-            goal_x_global = self.initial_goal[0] - displacement[0]
-            goal_y_global = self.initial_goal[1] - displacement[1]
+                goal_x_global = self.initial_goal[0] - displacement[0]
+                goal_y_global = self.initial_goal[1] - displacement[1]
 
-            current_yaw = Rotation.from_quat(
-                [
-                    odom.pose.pose.orientation.x,
-                    odom.pose.pose.orientation.y,
-                    odom.pose.pose.orientation.z,
-                    odom.pose.pose.orientation.w,
-                ]
-            ).as_euler("zyx")[0]
+                current_yaw = Rotation.from_quat(
+                    [
+                        odom.pose.pose.orientation.x,
+                        odom.pose.pose.orientation.y,
+                        odom.pose.pose.orientation.z,
+                        odom.pose.pose.orientation.w,
+                    ]
+                ).as_euler("zyx")[0]
 
-            c = np.cos(-current_yaw)
-            s = np.sin(-current_yaw)
+                c = np.cos(-current_yaw)
+                s = np.sin(-current_yaw)
 
-            local_goal_x = goal_x_global * c - goal_y_global * s
-            local_goal_y = goal_x_global * s + goal_y_global * c
+                local_goal_x = goal_x_global * c - goal_y_global * s
+                local_goal_y = goal_x_global * s + goal_y_global * c
 
-            local_goal = [local_goal_x, local_goal_y]
-            self.planner.move_goal([local_goal_x, local_goal_y], [0.0], 0.5, 5.0)
-            pending_start_goal = (self.initial_start, local_goal)
+                local_goal = [local_goal_x, local_goal_y]
+                self.planner.move_goal([local_goal_x, local_goal_y], [0.0], 0.5, 5.0)
+                pending_start_goal = (self.initial_start, local_goal)
+            else:
+                self.get_logger().warn("GPS received but no fix acquired", throttle_duration_sec=2.0)
 
         scan_age = (self.get_clock().now() - scan_time).nanoseconds / 1e9
         if scan_age > 0.5:
@@ -269,8 +276,7 @@ class ControllerNode(Node):
         self.last_time_ns = current_time_ns
 
         with self.viz_lock:
-            self.pending_obstacles = detected_obstacles[::5]
-            self.pending_obstacles = detected_obstacles
+            self.pending_obstacles = detected_obstacles[::7]
             self.pending_trajectory = trajectory
             if pending_start_goal is not None:
                 self.pending_start_goal = pending_start_goal

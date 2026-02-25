@@ -111,7 +111,7 @@ class SegmentVelocityCost(pyceres.CostFunction):
         residuals[0] = w * diff
 
         if jacobians is not None:
-            if v < self.max_v:
+            if v <= self.max_v:
                 if jacobians[0] is not None:
                     jacobians[0][:] = [0.0, 0.0]
                 if jacobians[1] is not None:
@@ -170,7 +170,7 @@ class SegmentAngularVelocityCost(pyceres.CostFunction):
         residuals[0] = w * diff
 
         if jacobians is not None:
-            if omega < self.max_omega:
+            if omega <= self.max_omega:
                 if jacobians[0] is not None:
                     jacobians[0][0] = 0.0
                 if jacobians[1] is not None:
@@ -189,6 +189,103 @@ class SegmentAngularVelocityCost(pyceres.CostFunction):
 
             if jacobians[2] is not None:
                 jacobians[2][0] = -w * omega * inv_dt
+
+        return True
+
+
+class SegmentAccelerationCost(pyceres.CostFunction):
+    def __init__(self, weight: float, max_a: float):
+        super().__init__()
+        self.weight = weight
+        self.max_a = max_a
+
+        self.set_num_residuals(1)
+        self.set_parameter_block_sizes([2, 2, 2, 1, 1])
+
+    def Evaluate(self, parameters, residuals, jacobians):
+        A_x, A_y = parameters[0]
+        B_x, B_y = parameters[1]
+        C_x, C_y = parameters[2]
+        dt1 = parameters[3][0]
+        dt2 = parameters[4][0]
+        if abs(dt1) < 1e-9 or abs(dt2) < 1e-9:
+            return False
+
+        AB_x = B_x - A_x
+        AB_y = B_y - A_y
+        AB_len = np.sqrt(AB_x**2 + AB_y**2 + 1e-10)
+
+        BC_x = C_x - B_x
+        BC_y = C_y - B_y
+        BC_len = np.sqrt(BC_x**2 + BC_y**2 + 1e-10)
+
+        dt = dt1 + dt2
+
+        a = (AB_len / dt1 + BC_len / dt2) * 2 / dt
+
+        diff = 0
+        if a > self.max_a:
+            diff = a - self.max_a
+
+        w = self.weight
+        residuals[0] = w * diff
+
+        if jacobians is not None:
+            if a <= self.max_a:
+                if jacobians[0] is not None:
+                    jacobians[0][:] = [0.0, 0.0]
+                if jacobians[1] is not None:
+                    jacobians[1][:] = [0.0, 0.0]
+                if jacobians[2] is not None:
+                    jacobians[2][:] = [0.0, 0.0]
+                if jacobians[3] is not None:
+                    jacobians[3][0] = 0.0
+                if jacobians[4] is not None:
+                    jacobians[4][0] = 0.0
+                return True
+
+            dt1_sq = dt1 * dt1
+            dt2_sq = dt2 * dt2
+            dt_sq = dt * dt
+
+            dx1 = B_x - A_x
+            dx2 = C_x - B_x
+            dy1 = B_y - A_y
+            dy2 = C_y - B_y
+
+            l1_dt1 = AB_len * dt1
+            l2_dt2 = BC_len * dt2
+            dt_half = dt * 0.5
+            dt_half_1 = l1_dt1 * dt_half
+            inv1 = w / dt_half_1
+            dt_half_2 = l2_dt2 * dt_half
+            inv2 = w / dt_half_2
+            dt_half_12 = l2_dt2 * dt_half_1
+            inv12 = w / dt_half_12
+
+            if jacobians[0] is not None:
+                jacobians[0][:] = [-dx1 * inv1, -dy1 * inv1]
+            if jacobians[1] is not None:
+                jacobians[1][:] = [
+                    (l2_dt2 * dx1 - l1_dt1 * dx2) * inv12,
+                    (l2_dt2 * dy1 - l1_dt1 * dy2) * inv12,
+                ]
+            if jacobians[2] is not None:
+                jacobians[2][:] = [dx2 * inv2, dy2 * inv2]
+            if jacobians[3] is not None:
+                jacobians[3][0] = (
+                    -2
+                    * w
+                    * (BC_len * dt1_sq + AB_len * dt2 * (dt + dt1))
+                    / (dt1_sq * dt2 * dt_sq)
+                )
+            if jacobians[4] is not None:
+                jacobians[4][0] = (
+                    -2
+                    * w
+                    * (AB_len * dt2_sq + BC_len * dt1 * (dt + dt2))
+                    / (dt2_sq * dt1 * dt_sq)
+                )
 
         return True
 
@@ -573,6 +670,10 @@ class TEBPlanner(TrajectoryPlanner):
             weight=10.0,
             max_v=self.max_v,
         )
+        acceleration_cost = SegmentAccelerationCost(
+            weight=10.0,
+            max_a=self.max_a,
+        )
         angular_velocity_cost = SegmentAngularVelocityCost(
             weight=5.0,
             max_omega=self.max_v / 2,
@@ -592,6 +693,16 @@ class TEBPlanner(TrajectoryPlanner):
 
         n_points = len(self.optimization_xy)
 
+        # problem.add_residual_block(
+        #     acceleration_cost,
+        #     None,
+        #     [
+        #         self.current_xy,
+        #         *self.optimization_xy[:2],
+        #         self.optimization_dt[0],
+        #         self.optimization_dt[0],
+        #     ],
+        # )
         for i in range(n_points - 1):
             xy_curr = self.optimization_xy[i]
             xy_next = self.optimization_xy[i + 1]
@@ -605,6 +716,18 @@ class TEBPlanner(TrajectoryPlanner):
             problem.add_residual_block(
                 angular_velocity_cost, None, [theta_curr, theta_next, dt]
             )
+            if i < n_points - 2:
+                problem.add_residual_block(
+                    acceleration_cost,
+                    None,
+                    [
+                        xy_curr,
+                        xy_next,
+                        self.optimization_xy[i + 2],
+                        dt,
+                        self.optimization_dt[i + 1],
+                    ],
+                )
             problem.add_residual_block(
                 kinematic_cost, None, [xy_curr, theta_curr, xy_next, theta_next]
             )
@@ -621,8 +744,6 @@ class TEBPlanner(TrajectoryPlanner):
         problem.set_parameter_block_constant(self.optimization_xy[-1])
         problem.set_parameter_block_constant(self.optimization_theta[0])
         problem.set_parameter_block_constant(self.optimization_theta[-1])
-        # problem.set_parameter_block_constant(self.optimization_theta[0])
-        # problem.set_parameter_block_constant(self.optimization_theta[-1])
 
         options = pyceres.SolverOptions()
         options.max_num_iterations = iterations

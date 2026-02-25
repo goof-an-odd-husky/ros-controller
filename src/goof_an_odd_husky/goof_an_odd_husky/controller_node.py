@@ -83,7 +83,7 @@ class ControllerNode(Node):
         self.initial_goal: list[float] = [10.0, 0.0, 0.0]
         self.visualizer.set_start_goal(self.initial_start, self.initial_goal)
         self.planner: TEBPlanner = TEBPlanner(
-            self.initial_start, self.initial_goal, 1, 1
+            self.initial_start, self.initial_goal, 1, 2
         )
         self.planner.plan()
 

@@ -86,6 +86,7 @@ class TrajectoryVisualizer:
         title: str = "TEB Optimization",
         path_render_mode: PathRenderMode | str = PathRenderMode.STRAIGHT,
         interactive_obstacles: bool = True,
+        use_global: bool = False,
     ) -> None:
         self._is_open = True
         self.interactive_obstacles = interactive_obstacles
@@ -93,6 +94,7 @@ class TrajectoryVisualizer:
         self.obstacle_radius = 0.5
         self.start_pos = None
         self.goal_pos = None
+        self.use_global = use_global
 
         if isinstance(path_render_mode, str):
             path_render_mode = PathRenderMode(path_render_mode)
@@ -161,16 +163,25 @@ class TrajectoryVisualizer:
         if interactive_obstacles:
             self._plot.scene().sigMouseClicked.connect(self._on_mouse_clicked)
 
+        self._win.keyPressEvent = self._on_key_pressed
         self._win.closeEvent = lambda e: (setattr(self, "_is_open", False), e.accept())
         self._win.show()
         self._app.processEvents()
 
-    @staticmethod
-    def _to_canvas(x: float, y: float) -> tuple[float, float]:
+    def _on_key_pressed(self, event) -> None:
+        if event.key() == QtCore.Qt.Key.Key_G:
+            self.use_global = not self.use_global
+            print(f"Visualization mode: {'Global' if self.use_global else 'Robot'}")
+            self._redraw_obstacles()
+
+    def _to_canvas(self, x: float, y: float) -> tuple[float, float]:
+        if self.use_global:
+            return x, y
         return -y, x
 
-    @staticmethod
-    def _from_canvas(cx: float, cy: float) -> tuple[float, float]:
+    def _from_canvas(self, cx: float, cy: float) -> tuple[float, float]:
+        if self.use_global:
+            return cx, cy
         return cy, -cx
 
     @property
@@ -198,8 +209,11 @@ class TrajectoryVisualizer:
             return
 
         transformed = poses.copy()
-        transformed[:, 0], transformed[:, 1] = -poses[:, 1], poses[:, 0]
-        transformed[:, 2] = poses[:, 2] + np.pi / 2
+        if self.use_global:
+            pass
+        else:
+            transformed[:, 0], transformed[:, 1] = -poses[:, 1], poses[:, 0]
+            transformed[:, 2] = poses[:, 2] + np.pi / 2
 
         if self.path_render_mode == PathRenderMode.STRAIGHT:
             self._traj_item.setData(transformed[:, 0], transformed[:, 1])
@@ -229,7 +243,12 @@ class TrajectoryVisualizer:
         if obs is None or len(obs) == 0:
             self._obstacle_item.setData([], [])
             return
-        canvas_obs = np.column_stack([-obs[:, 1], obs[:, 0], obs[:, 2]])
+
+        if self.use_global:
+            canvas_obs = obs
+        else:
+            canvas_obs = np.column_stack([-obs[:, 1], obs[:, 0], obs[:, 2]])
+
         xs, ys = _build_obstacle_polylines(canvas_obs)
         self._obstacle_item.setData(xs, ys)
 

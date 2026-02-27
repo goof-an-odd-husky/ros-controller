@@ -65,6 +65,7 @@ class ControllerNode(Node):
         self.last_scan_time = None
         self.latest_gps = None
         self.first_gps = None
+        self.first_yaw = None
         self.data_lock: threading.Lock = threading.Lock()
 
         self.pending_trajectory = None
@@ -87,6 +88,7 @@ class ControllerNode(Node):
         )
         self.planner.plan()
 
+        self.current_robot_pose_global = [0.0, 0.0, 0.0]
         self.get_logger().info("Controller initialized with Planner and Visualizer")
         self.last_time_ns = self.get_clock().now().nanoseconds
 
@@ -106,6 +108,15 @@ class ControllerNode(Node):
     def odom_callback(self, msg):
         with self.data_lock:
             self.latest_odom = msg
+            if self.first_yaw is None:
+                self.first_yaw = Rotation.from_quat(
+                    [
+                        msg.pose.pose.orientation.x,
+                        msg.pose.pose.orientation.y,
+                        msg.pose.pose.orientation.z,
+                        msg.pose.pose.orientation.w,
+                    ]
+                ).as_euler("zyx")[0]
 
     def get_odom_delta(self, curr, prev):
         if prev is None:
@@ -133,7 +144,7 @@ class ControllerNode(Node):
 
         dx_global = curr_pos.x - prev_pos.x
         dy_global = curr_pos.y - prev_pos.y
-        dtheta = curr_yaw - prev_yaw
+        dtheta = normalize_angle(curr_yaw - prev_yaw)
 
         c = np.cos(prev_yaw)
         s = np.sin(prev_yaw)
@@ -158,7 +169,7 @@ class ControllerNode(Node):
         step = 2
         obstacles = [[x, y, radius] for x, y in zip(xs[::step], ys[::step])]
 
-        return np.array(obstacles)
+        return np.array(obstacles) if obstacles else np.empty((0, 3))
 
     def trajectory_to_action(
         self, trajectory: Annotated[NDArray[np.float64], (None, 4)]
@@ -229,8 +240,14 @@ class ControllerNode(Node):
                     gps_data.longitude,
                 )
 
-                goal_x_global = self.initial_goal[0] - displacement[0]
-                goal_y_global = self.initial_goal[1] - displacement[1]
+                c_init = np.cos(self.first_yaw)
+                s_init = np.sin(self.first_yaw)
+
+                disp_forward = displacement[0] * c_init + displacement[1] * s_init
+                disp_left = -displacement[0] * s_init + displacement[1] * c_init
+
+                goal_x_initial_frame = self.initial_goal[0] - disp_forward
+                goal_y_initial_frame = self.initial_goal[1] - disp_left
 
                 current_yaw = Rotation.from_quat(
                     [
@@ -241,17 +258,29 @@ class ControllerNode(Node):
                     ]
                 ).as_euler("zyx")[0]
 
+                if self.first_yaw is not None:
+                    current_yaw = normalize_angle(current_yaw - self.first_yaw)
+
                 c = np.cos(-current_yaw)
                 s = np.sin(-current_yaw)
 
-                local_goal_x = goal_x_global * c - goal_y_global * s
-                local_goal_y = goal_x_global * s + goal_y_global * c
+                local_goal_x = goal_x_initial_frame * c - goal_y_initial_frame * s
+                local_goal_y = goal_x_initial_frame * s + goal_y_initial_frame * c
 
-                local_goal = [local_goal_x, local_goal_y]
+                local_goal = [local_goal_x, local_goal_y, 0.0]
                 self.planner.move_goal([local_goal_x, local_goal_y], [0.0], 0.5, 5.0)
                 pending_start_goal = (self.initial_start, local_goal)
+
+                with self.viz_lock:
+                    self.current_robot_pose_global = [
+                        displacement[0],
+                        displacement[1],
+                        current_yaw,
+                    ]
             else:
-                self.get_logger().warn("GPS received but no fix acquired", throttle_duration_sec=2.0)
+                self.get_logger().warn(
+                    "GPS received but no fix acquired", throttle_duration_sec=2.0
+                )
 
         scan_age = (self.get_clock().now() - scan_time).nanoseconds / 1e9
         if scan_age > 0.5:
@@ -289,12 +318,44 @@ class ControllerNode(Node):
             trajectory = self.pending_trajectory
             obstacles = self.pending_obstacles
             start_goal = self.pending_start_goal
+            rx, ry, rtheta = self.current_robot_pose_global
+            if self.first_yaw is not None:
+                rtheta = normalize_angle(rtheta - self.first_yaw)
             self.pending_trajectory = None
             self.pending_obstacles = None
             self.pending_start_goal = None
 
         if trajectory is None and obstacles is None:
             return
+
+        if self.visualizer.use_global:
+            c = np.cos(rtheta)
+            s = np.sin(rtheta)
+
+            if trajectory is not None:
+                gtraj = trajectory.copy()
+                gtraj[:, 0] = rx + trajectory[:, 0] * c - trajectory[:, 1] * s
+                gtraj[:, 1] = ry + trajectory[:, 0] * s + trajectory[:, 1] * c
+                gtraj[:, 2] = trajectory[:, 2] + rtheta
+                trajectory = gtraj
+
+            if obstacles is not None:
+                gobs = obstacles.copy()
+                gobs[:, 0] = rx + obstacles[:, 0] * c - obstacles[:, 1] * s
+                gobs[:, 1] = ry + obstacles[:, 0] * s + obstacles[:, 1] * c
+                obstacles = gobs
+
+            if start_goal is not None:
+                start, goal = start_goal
+                gsx = rx + start[0] * c - start[1] * s
+                gsy = ry + start[0] * s + start[1] * c
+                ggx = rx + goal[0] * c - goal[1] * s
+                ggy = ry + goal[0] * s + goal[1] * c
+
+                gs_theta = (start[2] if len(start) > 2 else 0.0) + rtheta
+                gg_theta = (goal[2] if len(goal) > 2 else 0.0) + rtheta
+
+                start_goal = ([gsx, gsy, gs_theta], [ggx, ggy, gg_theta])
 
         if start_goal is not None:
             self.visualizer.set_start_goal(*start_goal)

@@ -221,17 +221,21 @@ class SegmentAccelerationCost(pyceres.CostFunction):
 
         dt = dt1 + dt2
 
-        a = (AB_len / dt1 + BC_len / dt2) * 2 / dt
+        a = (BC_len / dt2 - AB_len / dt1) * 2 / dt
 
         diff = 0
-        if a > self.max_a:
-            diff = a - self.max_a
+        abs_a = abs(a)
+        if abs_a > self.max_a:
+            diff = abs_a - self.max_a
+            sign_a = 1.0 if a > 0 else -1.0
+        else:
+            sign_a = 0.0
 
         w = self.weight
         residuals[0] = w * diff
 
         if jacobians is not None:
-            if a <= self.max_a:
+            if abs_a <= self.max_a:
                 if jacobians[0] is not None:
                     jacobians[0][:] = [0.0, 0.0]
                 if jacobians[1] is not None:
@@ -253,6 +257,8 @@ class SegmentAccelerationCost(pyceres.CostFunction):
             dy1 = B_y - A_y
             dy2 = C_y - B_y
 
+            w = w * sign_a
+
             l1_dt1 = AB_len * dt1
             l2_dt2 = BC_len * dt2
             dt_half = dt * 0.5
@@ -264,26 +270,26 @@ class SegmentAccelerationCost(pyceres.CostFunction):
             inv12 = w / dt_half_12
 
             if jacobians[0] is not None:
-                jacobians[0][:] = [-dx1 * inv1, -dy1 * inv1]
+                jacobians[0][:] = [dx1 * inv1, dy1 * inv1]
             if jacobians[1] is not None:
                 jacobians[1][:] = [
-                    (l2_dt2 * dx1 - l1_dt1 * dx2) * inv12,
-                    (l2_dt2 * dy1 - l1_dt1 * dy2) * inv12,
+                    -(l2_dt2 * dx1 + l1_dt1 * dx2) * inv12,
+                    -(l2_dt2 * dy1 + l1_dt1 * dy2) * inv12,
                 ]
             if jacobians[2] is not None:
                 jacobians[2][:] = [dx2 * inv2, dy2 * inv2]
             if jacobians[3] is not None:
                 jacobians[3][0] = (
-                    -2
+                    2
                     * w
-                    * (BC_len * dt1_sq + AB_len * dt2 * (dt + dt1))
+                    * (-BC_len * dt1_sq + AB_len * dt2 * (dt + dt1))
                     / (dt1_sq * dt2 * dt_sq)
                 )
             if jacobians[4] is not None:
                 jacobians[4][0] = (
-                    -2
+                    2
                     * w
-                    * (AB_len * dt2_sq + BC_len * dt1 * (dt + dt2))
+                    * (AB_len * dt2_sq - BC_len * dt1 * (dt + dt2))
                     / (dt2_sq * dt1 * dt_sq)
                 )
 
@@ -788,17 +794,17 @@ class TEBPlanner(TrajectoryPlanner):
                 angular_velocity_cost, None, [theta_curr, theta_next, dt]
             )
             if i < n_points - 2:
-                # problem.add_residual_block(
-                #     acceleration_cost,
-                #     None,
-                #     [
-                #         xy_curr,
-                #         xy_next,
-                #         self.optimization_xy[i + 2],
-                #         dt,
-                #         self.optimization_dt[i + 1],
-                #     ],
-                # )
+                problem.add_residual_block(
+                    acceleration_cost,
+                    None,
+                    [
+                        xy_curr,
+                        xy_next,
+                        self.optimization_xy[i + 2],
+                        dt,
+                        self.optimization_dt[i + 1],
+                    ],
+                )
                 problem.add_residual_block(
                     angular_acceleration_cost,
                     None,

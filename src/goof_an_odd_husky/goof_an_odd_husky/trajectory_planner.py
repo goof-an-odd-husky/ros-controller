@@ -72,6 +72,15 @@ class TrajectoryPlanner(ABC):
         """
         return self.plan()
 
+    @abstractmethod
+    def get_length(self) -> int:
+        """Get the length of the current trajectory.
+
+        Returns:
+            The length of the current trajectory
+        """
+        ...
+
     def set_start_pose(self, pose: NDArray[np.floating] | list[float]) -> None:
         """Update the start pose.
 

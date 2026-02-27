@@ -1,3 +1,4 @@
+from goof_an_odd_husky.trajectory_planner import TrajectoryPlanner
 from numpy.typing import NDArray
 from typing import Annotated
 from goof_an_odd_husky.helpers import gps_to_vector, normalize_angle
@@ -20,6 +21,8 @@ from .trajectory_vizualizer import TrajectoryVisualizer
 
 
 class ControllerNode(Node):
+    planner: TrajectoryPlanner
+
     def __init__(self):
         super().__init__("controller_node")
 
@@ -282,6 +285,10 @@ class ControllerNode(Node):
                     "GPS received but no fix acquired", throttle_duration_sec=2.0
                 )
 
+        if self.planner.get_length() <= 2:
+            self.get_logger().info("Reached the goal", throttle_duration_sec=1.0)
+            return
+
         scan_age = (self.get_clock().now() - scan_time).nanoseconds / 1e9
         if scan_age > 0.5:
             self.get_logger().error(
@@ -295,13 +302,13 @@ class ControllerNode(Node):
         trajectory = self.planner.get_trajectory()
 
         v, omega = self.trajectory_to_action(trajectory)
+        self.get_logger().debug(f"{v=}, {omega=}", throttle_duration_sec=1.0)
         twist_stamped_message = TwistStamped()
         twist_stamped_message.twist.linear.x = v
         twist_stamped_message.twist.angular.z = omega
         self.velocity_publisher.publish(twist_stamped_message)
         now = self.get_clock().now()
         current_time_ns = now.nanoseconds
-        print((current_time_ns - self.last_time_ns) / 1e9, len(detected_obstacles))
         self.last_time_ns = current_time_ns
 
         with self.viz_lock:

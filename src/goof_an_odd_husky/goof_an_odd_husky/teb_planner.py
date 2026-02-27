@@ -596,6 +596,9 @@ class TEBPlanner(TrajectoryPlanner):
 
         return np.hstack((xy, theta, dts))
 
+    def get_length(self):
+        return len(self.optimization_xy)
+
     def _resize_trajectory(self, min_distance: float, max_distance: float): ...  # todo
 
     def move_start(

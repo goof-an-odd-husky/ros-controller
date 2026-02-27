@@ -3,6 +3,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtWidgets, QtCore
 from numpy.typing import NDArray
 from enum import Enum
+from typing import Callable
 
 
 class PathRenderMode(Enum):
@@ -79,6 +80,27 @@ def _compute_arc_path(
 
 
 class TrajectoryVisualizer:
+    _is_open: bool
+    interactive_obstacles: bool
+    obstacles: list[list[float]]
+    obstacle_radius: float
+    start_pos: list[float] | None
+    goal_pos: list[float] | None
+    use_global: bool
+    path_render_mode: PathRenderMode
+    _app: QtWidgets.QApplication
+    _win: QtWidgets.QMainWindow
+    _plot: pg.PlotWidget
+    _traj_item: pg.PlotDataItem
+    _traj_straight_item: pg.PlotDataItem | None
+    _start_item: pg.ScatterPlotItem
+    _goal_item: pg.ScatterPlotItem
+    _obstacle_item: pg.PlotDataItem
+    _arrows_item: pg.PlotDataItem
+    _obstacles_array: NDArray[np.float64]
+    on_goal_set: Callable[[float, float], None] | None
+    _coord_input: QtWidgets.QLineEdit
+
     def __init__(
         self,
         x_lim: tuple[float, float] = (0, 10),
@@ -87,14 +109,16 @@ class TrajectoryVisualizer:
         path_render_mode: PathRenderMode | str = PathRenderMode.STRAIGHT,
         interactive_obstacles: bool = True,
         use_global: bool = False,
+        on_goal_set: Callable[[float, float], None] | None = None,
     ) -> None:
         self._is_open = True
         self.interactive_obstacles = interactive_obstacles
-        self.obstacles: list[list[float]] = []
+        self.obstacles = []
         self.obstacle_radius = 0.5
         self.start_pos = None
         self.goal_pos = None
         self.use_global = use_global
+        self.on_goal_set = on_goal_set
 
         if isinstance(path_render_mode, str):
             path_render_mode = PathRenderMode(path_render_mode)
@@ -106,10 +130,33 @@ class TrajectoryVisualizer:
 
         self._win = QtWidgets.QMainWindow()
         self._win.setWindowTitle(title)
-        self._win.resize(900, 600)
+        self._win.resize(900, 700)
+
+        central_widget = QtWidgets.QWidget()
+        self._win.setCentralWidget(central_widget)
+        layout = QtWidgets.QVBoxLayout(central_widget)
+
+        input_panel = QtWidgets.QWidget()
+        input_layout = QtWidgets.QHBoxLayout(input_panel)
+
+        coord_label = QtWidgets.QLabel("Goal (lat, lon):")
+        self._coord_input = QtWidgets.QLineEdit()
+        self._coord_input.setPlaceholderText("e.g., 37.7749, -122.4194")
+        self._coord_input.setMinimumWidth(200)
+        self._coord_input.returnPressed.connect(self._on_set_goal_clicked)
+
+        set_goal_btn = QtWidgets.QPushButton("Set Goal")
+        set_goal_btn.clicked.connect(self._on_set_goal_clicked)
+
+        input_layout.addWidget(coord_label)
+        input_layout.addWidget(self._coord_input)
+        input_layout.addWidget(set_goal_btn)
+        input_layout.addStretch()
+
+        layout.addWidget(input_panel)
 
         self._plot = pg.PlotWidget()
-        self._win.setCentralWidget(self._plot)
+        layout.addWidget(self._plot)
 
         self._plot.setXRange(*x_lim, padding=0)
         self._plot.setYRange(*y_lim, padding=0)
@@ -168,6 +215,24 @@ class TrajectoryVisualizer:
         self._win.show()
         self._app.processEvents()
 
+    def _on_set_goal_clicked(self) -> None:
+        text = self._coord_input.text().strip()
+        if not text:
+            return
+
+        parts = [p.strip() for p in text.split(",")]
+        if len(parts) != 2:
+            print("Invalid format. Use: latitude, longitude (e.g., 37.7749, -122.4194)")
+            return
+
+        try:
+            lat = float(parts[0])
+            lon = float(parts[1])
+            if self.on_goal_set:
+                self.on_goal_set(lat, lon)
+        except ValueError:
+            print("Invalid coordinates. Use numeric values for latitude and longitude")
+
     def _on_key_pressed(self, event) -> None:
         if event.key() == QtCore.Qt.Key.Key_G:
             self.use_global = not self.use_global
@@ -221,7 +286,8 @@ class TrajectoryVisualizer:
             ax, ay = _compute_arc_path(transformed)
             self._traj_item.setData(ax, ay)
         else:
-            self._traj_straight_item.setData(transformed[:, 0], transformed[:, 1])
+            if self._traj_straight_item is not None:
+                self._traj_straight_item.setData(transformed[:, 0], transformed[:, 1])
             ax, ay = _compute_arc_path(transformed)
             self._traj_item.setData(ax, ay)
 

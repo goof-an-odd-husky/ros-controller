@@ -797,17 +797,17 @@ class TEBPlanner(TrajectoryPlanner):
                 angular_velocity_cost, None, [theta_curr, theta_next, dt]
             )
             if i < n_points - 2:
-                problem.add_residual_block(
-                    acceleration_cost,
-                    None,
-                    [
-                        xy_curr,
-                        xy_next,
-                        self.optimization_xy[i + 2],
-                        dt,
-                        self.optimization_dt[i + 1],
-                    ],
-                )
+                # problem.add_residual_block(
+                #     acceleration_cost,
+                #     None,
+                #     [
+                #         xy_curr,
+                #         xy_next,
+                #         self.optimization_xy[i + 2],
+                #         dt,
+                #         self.optimization_dt[i + 1],
+                #     ],
+                # )
                 problem.add_residual_block(
                     angular_acceleration_cost,
                     None,

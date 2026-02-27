@@ -290,6 +290,81 @@ class SegmentAccelerationCost(pyceres.CostFunction):
         return True
 
 
+class SegmentAngularAccelerationCost(pyceres.CostFunction):
+    def __init__(self, weight: float, max_alpha: float):
+        super().__init__()
+        self.weight = weight
+        self.max_alpha = max_alpha
+
+        self.set_num_residuals(1)
+        self.set_parameter_block_sizes([1, 1, 1, 1, 1])
+
+    def Evaluate(self, parameters, residuals, jacobians):
+        A_theta = parameters[0][0]
+        B_theta = parameters[1][0]
+        C_theta = parameters[2][0]
+        dt1 = parameters[3][0]
+        dt2 = parameters[4][0]
+
+        if abs(dt1) < 1e-9 or abs(dt2) < 1e-9:
+            return False
+
+        dt = dt1 + dt2
+        inv_dt = 1.0 / dt
+        inv_dt1 = 1.0 / dt1
+        inv_dt2 = 1.0 / dt2
+
+        delta_theta1 = normalize_angle(B_theta - A_theta)
+        delta_theta2 = normalize_angle(C_theta - B_theta)
+
+        omega1 = delta_theta1 * inv_dt1
+        omega2 = delta_theta2 * inv_dt2
+
+        alpha = 2.0 * (omega2 - omega1) * inv_dt
+
+        diff = 0.0
+        if alpha > self.max_alpha:
+            diff = alpha - self.max_alpha
+        elif alpha < -self.max_alpha:
+            diff = alpha + self.max_alpha
+
+        w = self.weight
+        residuals[0] = w * diff
+
+        if jacobians is not None:
+            if diff == 0.0:
+                if jacobians[0] is not None:
+                    jacobians[0][0] = 0.0
+                if jacobians[1] is not None:
+                    jacobians[1][0] = 0.0
+                if jacobians[2] is not None:
+                    jacobians[2][0] = 0.0
+                if jacobians[3] is not None:
+                    jacobians[3][0] = 0.0
+                if jacobians[4] is not None:
+                    jacobians[4][0] = 0.0
+                return True
+
+            factor = 2.0 * w * inv_dt
+
+            if jacobians[0] is not None:
+                jacobians[0][0] = factor * inv_dt1
+
+            if jacobians[1] is not None:
+                jacobians[1][0] = -factor * (inv_dt1 + inv_dt2)
+
+            if jacobians[2] is not None:
+                jacobians[2][0] = factor * inv_dt2
+
+            if jacobians[3] is not None:
+                jacobians[3][0] = factor * omega1 * inv_dt1 - w * alpha * inv_dt
+
+            if jacobians[4] is not None:
+                jacobians[4][0] = -factor * omega2 * inv_dt2 - w * alpha * inv_dt
+
+        return True
+
+
 class SegmentKinematicsCost(pyceres.CostFunction):
     def __init__(self, weight: float):
         super().__init__()
@@ -563,12 +638,13 @@ class TEBPlanner(TrajectoryPlanner):
 
             point1_theta = self.optimization_theta[1]
             diff = normalize_angle(point1_theta - new_theta)
-            mean_theta = normalize_angle(new_theta.item() + diff / 2)
-            self.optimization_theta.insert(1, mean_theta)
 
-            half_dt = self.optimization_dt[0] / 2
-            self.optimization_dt[0] = half_dt
-            self.optimization_dt.insert(1, half_dt)
+            mean_theta = normalize_angle(new_theta.item() + diff.item() / 2.0)
+            self.optimization_theta.insert(1, np.array([mean_theta], dtype=np.float64))
+
+            half_dt = self.optimization_dt[0].item() / 2.0
+            self.optimization_dt[0] = np.array([half_dt], dtype=np.float64)
+            self.optimization_dt.insert(1, np.array([half_dt], dtype=np.float64))
 
     def move_goal(
         self, new_xy, new_theta, min_distance: float, max_distance: float
@@ -610,14 +686,14 @@ class TEBPlanner(TrajectoryPlanner):
 
             prev_theta = self.optimization_theta[-2]
             diff = normalize_angle(prev_theta - new_theta)
-            mean_theta = normalize_angle(new_theta.item() + diff / 2)
 
+            mean_theta = normalize_angle(new_theta.item() + diff.item() / 2.0)
             self.optimization_xy.insert(-1, mid_xy)
-            self.optimization_theta.insert(-1, mean_theta)
+            self.optimization_theta.insert(-1, np.array([mean_theta], dtype=np.float64))
 
-            half_dt = self.optimization_dt[-1] / 2
-            self.optimization_dt[-1] = half_dt
-            self.optimization_dt.insert(-1, half_dt)
+            half_dt = self.optimization_dt[-1].item() / 2.0
+            self.optimization_dt[-1] = np.array([half_dt], dtype=np.float64)
+            self.optimization_dt.insert(-1, np.array([half_dt], dtype=np.float64))
 
     def transform_trajectory(self, dx: float, dy: float, dtheta: float):
         """
@@ -678,6 +754,11 @@ class TEBPlanner(TrajectoryPlanner):
             weight=5.0,
             max_omega=self.max_v / 2,
         )
+        angular_acceleration_cost = SegmentAngularAccelerationCost(
+            weight=10.0,
+            max_alpha=self.max_a
+            / 2,  # half linear acc as heuristic
+        )
         kinematic_cost = SegmentKinematicsCost(
             weight=10.0,
         )
@@ -693,16 +774,6 @@ class TEBPlanner(TrajectoryPlanner):
 
         n_points = len(self.optimization_xy)
 
-        # problem.add_residual_block(
-        #     acceleration_cost,
-        #     None,
-        #     [
-        #         self.current_xy,
-        #         *self.optimization_xy[:2],
-        #         self.optimization_dt[0],
-        #         self.optimization_dt[0],
-        #     ],
-        # )
         for i in range(n_points - 1):
             xy_curr = self.optimization_xy[i]
             xy_next = self.optimization_xy[i + 1]
@@ -717,13 +788,24 @@ class TEBPlanner(TrajectoryPlanner):
                 angular_velocity_cost, None, [theta_curr, theta_next, dt]
             )
             if i < n_points - 2:
+                # problem.add_residual_block(
+                #     acceleration_cost,
+                #     None,
+                #     [
+                #         xy_curr,
+                #         xy_next,
+                #         self.optimization_xy[i + 2],
+                #         dt,
+                #         self.optimization_dt[i + 1],
+                #     ],
+                # )
                 problem.add_residual_block(
-                    acceleration_cost,
+                    angular_acceleration_cost,
                     None,
                     [
-                        xy_curr,
-                        xy_next,
-                        self.optimization_xy[i + 2],
+                        theta_curr,
+                        theta_next,
+                        self.optimization_theta[i + 2],
                         dt,
                         self.optimization_dt[i + 1],
                     ],

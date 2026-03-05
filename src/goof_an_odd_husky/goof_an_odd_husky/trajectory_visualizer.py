@@ -1,3 +1,4 @@
+from goof_an_odd_husky.trajectory_planner import Obstacle, CircleObstacle, LineObstacle
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtWidgets, QtCore
@@ -18,20 +19,23 @@ _CIRCLE_SIN = np.sin(_CIRCLE_THETA)
 
 
 def _build_obstacle_polylines(
-    obstacles: NDArray[np.floating],
+    obstacles: list[Obstacle],
 ) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
-    if len(obstacles) == 0:
+    if not obstacles:
         return np.array([]), np.array([])
-    n = len(obstacles)
-    ox = obstacles[:, 0:1]
-    oy = obstacles[:, 1:2]
-    r = obstacles[:, 2:3]
-    circle_x = ox + r * _CIRCLE_COS
-    circle_y = oy + r * _CIRCLE_SIN
-    nan_col = np.full((n, 1), np.nan)
-    xs = np.hstack([circle_x, nan_col]).ravel()
-    ys = np.hstack([circle_y, nan_col]).ravel()
-    return xs, ys
+
+    xs, ys = [], []
+    for obs in obstacles:
+        if isinstance(obs, CircleObstacle):
+            xs.extend((obs.x + obs.radius * _CIRCLE_COS).tolist())
+            xs.append(np.nan)
+            ys.extend((obs.y + obs.radius * _CIRCLE_SIN).tolist())
+            ys.append(np.nan)
+        elif isinstance(obs, LineObstacle):
+            xs.extend([obs.x1, obs.x2, np.nan])
+            ys.extend([obs.y1, obs.y2, np.nan])
+
+    return np.array(xs, dtype=np.float64), np.array(ys, dtype=np.float64)
 
 
 def _build_arrow_segments(
@@ -82,7 +86,7 @@ def _compute_arc_path(
 class TrajectoryVisualizer:
     _is_open: bool
     interactive_obstacles: bool
-    obstacles: list[list[float]]
+    obstacles: list[Obstacle]
     obstacle_radius: float
     start_pos: list[float] | None
     goal_pos: list[float] | None
@@ -97,7 +101,7 @@ class TrajectoryVisualizer:
     _goal_item: pg.ScatterPlotItem
     _obstacle_item: pg.PlotDataItem
     _arrows_item: pg.PlotDataItem
-    _obstacles_array: NDArray[np.float64]
+    _current_obstacles: list[Obstacle]
     on_goal_set: Callable[[float, float], None] | None
     _coord_input: QtWidgets.QLineEdit
 
@@ -114,6 +118,7 @@ class TrajectoryVisualizer:
         self._is_open = True
         self.interactive_obstacles = interactive_obstacles
         self.obstacles = []
+        self._current_obstacles = []
         self.obstacle_radius = 0.5
         self.start_pos = None
         self.goal_pos = None
@@ -125,7 +130,6 @@ class TrajectoryVisualizer:
         self.path_render_mode = path_render_mode
 
         self._app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-
         pg.setConfigOptions(antialias=True, background="w", foreground="k")
 
         self._win = QtWidgets.QMainWindow()
@@ -263,10 +267,10 @@ class TrajectoryVisualizer:
         self._start_item.setData([sx], [sy])
         self._goal_item.setData([gx], [gy])
 
-    def set_obstacles(self, obstacles: NDArray[np.floating]) -> None:
+    def set_obstacles(self, obstacles: list[Obstacle]) -> None:
         if not self._is_open:
             return
-        self._obstacles_array = np.asarray(obstacles, dtype=np.float64)
+        self._current_obstacles = obstacles
         self._redraw_obstacles()
 
     def update_trajectory(self, poses: NDArray[np.floating] | None) -> None:
@@ -274,9 +278,7 @@ class TrajectoryVisualizer:
             return
 
         transformed = poses.copy()
-        if self.use_global:
-            pass
-        else:
+        if not self.use_global:
             transformed[:, 0], transformed[:, 1] = -poses[:, 1], poses[:, 0]
             transformed[:, 2] = poses[:, 2] + np.pi / 2
 
@@ -294,10 +296,8 @@ class TrajectoryVisualizer:
         arrow_xs, arrow_ys = _build_arrow_segments(transformed)
         self._arrows_item.setData(arrow_xs, arrow_ys)
 
-    def get_obstacles(self) -> NDArray[np.floating]:
-        if not self.obstacles:
-            return np.empty((0, 3))
-        return np.array(self.obstacles)
+    def get_obstacles(self) -> list[Obstacle]:
+        return list(self.obstacles)
 
     def draw(self, pause_time: float = 0.01) -> None:
         if not self._is_open:
@@ -305,15 +305,20 @@ class TrajectoryVisualizer:
         self._app.processEvents()
 
     def _redraw_obstacles(self) -> None:
-        obs = getattr(self, "_obstacles_array", None)
-        if obs is None or len(obs) == 0:
+        obs = getattr(self, "_current_obstacles", None)
+        if not obs:
             self._obstacle_item.setData([], [])
             return
 
-        if self.use_global:
-            canvas_obs = obs
-        else:
-            canvas_obs = np.column_stack([-obs[:, 1], obs[:, 0], obs[:, 2]])
+        canvas_obs = []
+        for o in obs:
+            if isinstance(o, CircleObstacle):
+                cx, cy = self._to_canvas(o.x, o.y)
+                canvas_obs.append(CircleObstacle(cx, cy, o.radius))
+            elif isinstance(o, LineObstacle):
+                cx1, cy1 = self._to_canvas(o.x1, o.y1)
+                cx2, cy2 = self._to_canvas(o.x2, o.y2)
+                canvas_obs.append(LineObstacle(cx1, cy1, cx2, cy2))
 
         xs, ys = _build_obstacle_polylines(canvas_obs)
         self._obstacle_item.setData(xs, ys)
@@ -328,7 +333,9 @@ class TrajectoryVisualizer:
 
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
             robot_x, robot_y = self._from_canvas(x, y)
-            self.obstacles.append([robot_x, robot_y, self.obstacle_radius])
+            self.obstacles.append(
+                CircleObstacle(robot_x, robot_y, self.obstacle_radius)
+            )
             self._redraw_obstacles()
         elif event.button() == QtCore.Qt.MouseButton.RightButton:
             self._remove_nearest_obstacle(x, y)
@@ -336,9 +343,31 @@ class TrajectoryVisualizer:
     def _remove_nearest_obstacle(self, x: float, y: float) -> None:
         if not self.obstacles:
             return
-        obs_arr = np.array(self.obstacles)
-        dists = np.hypot(obs_arr[:, 0] - x, obs_arr[:, 1] - y)
-        idx = int(np.argmin(dists))
-        if dists[idx] < 1.0:
-            self.obstacles.pop(idx)
-            self._redraw_obstacles()
+
+        robot_x, robot_y = self._from_canvas(x, y)
+        dists = []
+
+        for obs in self.obstacles:
+            if isinstance(obs, CircleObstacle):
+                dists.append(np.hypot(obs.x - robot_x, obs.y - robot_y))
+            elif isinstance(obs, LineObstacle):
+                px = obs.x2 - obs.x1
+                py = obs.y2 - obs.y1
+                norm = px * px + py * py
+                if norm == 0:
+                    dx = obs.x1 - robot_x
+                    dy = obs.y1 - robot_y
+                else:
+                    u = ((robot_x - obs.x1) * px + (robot_y - obs.y1) * py) / float(
+                        norm
+                    )
+                    u = max(0.0, min(1.0, u))
+                    dx = obs.x1 + u * px - robot_x
+                    dy = obs.y1 + u * py - robot_y
+                dists.append(np.hypot(dx, dy))
+
+        if dists:
+            idx = int(np.argmin(dists))
+            if dists[idx] < 1.0:
+                self.obstacles.pop(idx)
+                self._redraw_obstacles()

@@ -1,24 +1,36 @@
 from goof_an_odd_husky.helpers import normalize_angle
 from typing import override
-from .trajectory_planner import TrajectoryPlanner
+from goof_an_odd_husky.trajectory_planner import (
+    Obstacle,
+    CircleObstacle,
+    TrajectoryPlanner,
+)
 import numpy as np
 from numpy.typing import NDArray
 import pyceres
-
 
 DT_MIN = 0.01
 
 
 class SegmentObstaclesCost(pyceres.CostFunction):
     def __init__(
-        self, obstacles: NDArray[np.floating], weight: float, safety_radius: float
+        self,
+        circle_obstacles: list[CircleObstacle],
+        weight: float,
+        safety_radius: float,
     ):
         super().__init__()
-        self.obstacles_x = obstacles[
-            :, 0
-        ]  # todo: optimize and use separate arrays from the start?
-        self.obstacles_y = obstacles[:, 1]
-        self.obstacles_r = obstacles[:, 2]
+
+        self.obstacles_x = np.array(
+            [obs.x for obs in circle_obstacles], dtype=np.float64
+        )
+        self.obstacles_y = np.array(
+            [obs.y for obs in circle_obstacles], dtype=np.float64
+        )
+        self.obstacles_r = np.array(
+            [obs.radius for obs in circle_obstacles], dtype=np.float64
+        )
+
         self.n_obstacles = len(self.obstacles_r)
         self.weight = weight
         self.safety_radius = safety_radius
@@ -532,7 +544,7 @@ class TEBPlanner(TrajectoryPlanner):
         goal_pose: NDArray[np.floating] | list[float],
         max_v: float,
         max_a: float,
-        initial_step: float = 0.5,
+        initial_step: float = 1.0,
     ):
         self.setup_poses(start_pose, goal_pose)
         self.max_v = max_v
@@ -748,38 +760,28 @@ class TEBPlanner(TrajectoryPlanner):
 
         problem = pyceres.Problem()
 
-        obstacle_cost = SegmentObstaclesCost(
-            self.obstacles, weight=10.0, safety_radius=1.0
-        )
-        velocity_cost = SegmentVelocityCost(
-            weight=10.0,
-            max_v=self.max_v,
-        )
-        acceleration_cost = SegmentAccelerationCost(
-            weight=10.0,
-            max_a=self.max_a,
-        )
+        circle_obstacles = [
+            obs for obs in self.obstacles if isinstance(obs, CircleObstacle)
+        ]
+
+        obstacle_cost = None
+        if circle_obstacles:
+            obstacle_cost = SegmentObstaclesCost(
+                circle_obstacles, weight=10.0, safety_radius=1.0
+            )
+
+        velocity_cost = SegmentVelocityCost(weight=10.0, max_v=self.max_v)
+        acceleration_cost = SegmentAccelerationCost(weight=10.0, max_a=self.max_a)
         angular_velocity_cost = SegmentAngularVelocityCost(
-            weight=5.0,
-            max_omega=self.max_v / 2,
+            weight=5.0, max_omega=self.max_v / 2
         )
         angular_acceleration_cost = SegmentAngularAccelerationCost(
-            weight=10.0,
-            max_alpha=self.max_a
-            / 2,  # half linear acc as heuristic
+            weight=10.0, max_alpha=self.max_a / 2
         )
-        kinematic_cost = SegmentKinematicsCost(
-            weight=10.0,
-        )
-        heading_cost = SegmentHeadingCost(
-            weight=10.0,
-        )
-        angular_smoothing_cost = SegmentAngularSmoothingCost(
-            weight=0.5,
-        )
-        time_cost = SegmentTimeCost(
-            weight=10.0,
-        )
+        kinematic_cost = SegmentKinematicsCost(weight=10.0)
+        heading_cost = SegmentHeadingCost(weight=10.0)
+        angular_smoothing_cost = SegmentAngularSmoothingCost(weight=0.5)
+        time_cost = SegmentTimeCost(weight=10.0)
 
         n_points = len(self.optimization_xy)
 
@@ -791,11 +793,14 @@ class TEBPlanner(TrajectoryPlanner):
             theta_curr = self.optimization_theta[i]
             theta_next = self.optimization_theta[i + 1]
 
-            problem.add_residual_block(obstacle_cost, None, [xy_curr, xy_next])
+            if obstacle_cost is not None:
+                problem.add_residual_block(obstacle_cost, None, [xy_curr, xy_next])
+
             problem.add_residual_block(velocity_cost, None, [xy_curr, xy_next, dt])
             problem.add_residual_block(
                 angular_velocity_cost, None, [theta_curr, theta_next, dt]
             )
+
             if i < n_points - 2:
                 # problem.add_residual_block(
                 #     acceleration_cost,
@@ -819,6 +824,7 @@ class TEBPlanner(TrajectoryPlanner):
                         self.optimization_dt[i + 1],
                     ],
                 )
+
             problem.add_residual_block(
                 kinematic_cost, None, [xy_curr, theta_curr, xy_next, theta_next]
             )
@@ -829,6 +835,7 @@ class TEBPlanner(TrajectoryPlanner):
             problem.add_residual_block(
                 angular_smoothing_cost, None, [theta_curr, theta_next, dt]
             )
+
             problem.set_parameter_lower_bound(dt, 0, DT_MIN)
 
         problem.set_parameter_block_constant(self.optimization_xy[0])

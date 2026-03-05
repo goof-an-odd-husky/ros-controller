@@ -121,7 +121,7 @@ class ControllerNode(Node):
         )
 
         self.initial_start = [0.0, 0.0, 0.0]
-        self.initial_goal = [10.0, 0.0, 0.0]
+        self.initial_goal = [0.0, 0.0, 0.0]
         self.visualizer.set_start_goal(self.initial_start, self.initial_goal)
         self.planner = TEBPlanner(self.initial_start, self.initial_goal, 1, 2)
 
@@ -130,7 +130,7 @@ class ControllerNode(Node):
         self.goal_lat_lon = None
         self.needs_initial_plan = False
 
-        self.obstacle_pipeline = ObstaclePipeline()
+        self.obstacle_pipeline = ObstaclePipeline(cluster_break_distance=2, geometry_split_threshold=2)
 
         self.get_logger().info("Controller initialized with Planner and Visualizer")
         self.last_time_ns = self.get_clock().now().nanoseconds
@@ -510,7 +510,7 @@ class ControllerNode(Node):
 def main(args=None) -> None:
     rclpy.init(args=args)
 
-    controller_node = ControllerNode(debug=False)
+    controller_node = ControllerNode(debug=True)
 
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(controller_node)

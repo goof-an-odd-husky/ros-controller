@@ -124,11 +124,11 @@ class ControllerNode(Node):
         self.initial_goal = [10.0, 0.0, 0.0]
         self.visualizer.set_start_goal(self.initial_start, self.initial_goal)
         self.planner = TEBPlanner(self.initial_start, self.initial_goal, 1, 2)
-        self.planner.plan()
 
         self.current_robot_pose_global = [0.0, 0.0, 0.0]
         self.goal_reached = False
         self.goal_lat_lon = None
+        self.needs_initial_plan = False
 
         self.obstacle_pipeline = ObstaclePipeline()
 
@@ -142,7 +142,7 @@ class ControllerNode(Node):
             self.last_processed_odom = None
 
             self.planner = TEBPlanner(self.initial_start, self.initial_goal, 1, 2)
-            self.planner.plan()
+            self.needs_initial_plan = True
 
         self.get_logger().info(f"New goal set: lat={latitude}, lon={longitude}")
 
@@ -275,6 +275,8 @@ class ControllerNode(Node):
             return
 
         self._update_odometry(odom)
+        current_velocity = odom.twist.twist.linear.x
+        current_omega = odom.twist.twist.angular.z
 
         detected_obstacles = self._process_obstacles(scan, scan_time)
         t2 = time.perf_counter()
@@ -303,7 +305,8 @@ class ControllerNode(Node):
         t3 = time.perf_counter()
         performance["Goal update"] = round((t3 - t2) * 1000, 2)
 
-        if self.planner.get_length() <= 2:
+        distance = self.planner.get_distance_goal()
+        if distance < 1.0:
             if not self.goal_reached:
                 self.goal_reached = True
                 self.get_logger().info("Reached the goal - stopping control loop")
@@ -313,7 +316,9 @@ class ControllerNode(Node):
 
         self.goal_reached = False
 
-        self.planner.refine()
+        self.planner.refine(
+            current_velocity=current_velocity, current_omega=current_omega
+        )
         t4 = time.perf_counter()
         performance["Planner refinement"] = round((t4 - t3) * 1000, 2)
 
@@ -413,7 +418,10 @@ class ControllerNode(Node):
         local_goal_y = goal_x_initial_frame * s + goal_y_initial_frame * c
 
         local_goal = [local_goal_x, local_goal_y, 0.0]
-        self.planner.move_goal([local_goal_x, local_goal_y], [0.0], 0.5, 5.0)
+        self.planner.move_goal((local_goal_x, local_goal_y), (0.0,))
+        if self.needs_initial_plan:
+            self.planner.plan()
+            self.needs_initial_plan = False
 
         with self.viz_lock:
             self.current_robot_pose_global = [

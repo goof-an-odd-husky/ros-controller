@@ -246,6 +246,15 @@ class TrajectoryPlanner(ABC):
         """
         ...
 
+    @abstractmethod
+    def get_distance_goal(self) -> float:
+        """Return the distance to the goal.
+
+        Returns:
+            The straight line distance to the goal.
+        """
+        ...
+
     def transform_trajectory(self, dx: float, dy: float, dtheta: float):
         """
         Transforms the internal trajectory guess to account for robot motion.
@@ -258,20 +267,33 @@ class TrajectoryPlanner(ABC):
         ...
 
     def move_goal(
-        self, new_xy, new_theta, min_distance: float, max_distance: float
+        self,
+        new_xy: tuple[float, float],
+        new_theta: tuple[float],
     ) -> None:
         """
-        Move the goal point (and possibly remove/insert, based on distance to the previous point).
+        Move the goal point.
+
+        Args:
+            new_xy: a tuple of x and y coordinates (relative) of the goal.
+            new_theta: a tuple of a theta - angle (relative) of the vehicle when positioned at the goal
         """
         ...
 
-    def refine(self, iterations: int = 1) -> bool:
+    def refine(
+        self,
+        iterations: int = 1,
+        current_velocity: float = 0,
+        current_omega: float = 0,
+    ) -> bool:
         """Refine the current trajectory (optional for some planners).
 
         Default implementation does nothing. Override for optimization-based planners.
 
         Args:
             iterations: how many iterations to take during a single refinement.
+            current_velocity: current velocity (in m/s).
+            current_omega: current angular velocity (in rad/s).
         """
         return True
 

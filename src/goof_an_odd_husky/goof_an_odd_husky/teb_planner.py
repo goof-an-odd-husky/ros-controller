@@ -1,9 +1,9 @@
 from goof_an_odd_husky.helpers import normalize_angle
 from typing import override
 from goof_an_odd_husky.trajectory_planner import (
-    Obstacle,
     CircleObstacle,
     TrajectoryPlanner,
+    LineObstacle,
 )
 import numpy as np
 from numpy.typing import NDArray
@@ -12,7 +12,139 @@ import pyceres
 DT_MIN = 0.01
 
 
-class SegmentObstaclesCost(pyceres.CostFunction):
+def point_segment_distance(Px, Py, S1x, S1y, S2x, S2y):
+    """Vectorized point-to-segment distance."""
+    S1S2_x = S2x - S1x
+    S1S2_y = S2y - S1y
+    S1P_x = Px - S1x
+    S1P_y = Py - S1y
+
+    len_sq = S1S2_x**2 + S1S2_y**2
+    len_sq = np.maximum(len_sq, 1e-10)
+
+    t = (S1P_x * S1S2_x + S1P_y * S1S2_y) / len_sq
+    t = np.clip(t, 0.0, 1.0)
+
+    Proj_x = S1x + t * S1S2_x
+    Proj_y = S1y + t * S1S2_y
+
+    u_x = Px - Proj_x
+    u_y = Py - Proj_y
+
+    d = np.sqrt(u_x**2 + u_y**2 + 1e-10)
+    return d, u_x, u_y, t
+
+
+class SegmentLineObstaclesCost(pyceres.CostFunction):
+    def __init__(
+        self,
+        line_obstacles: list[LineObstacle],
+        weight: float,
+        safety_radius: float,
+    ):
+        super().__init__()
+
+        self.C_x = np.array([obs.x1 for obs in line_obstacles], dtype=np.float64)
+        self.C_y = np.array([obs.y1 for obs in line_obstacles], dtype=np.float64)
+        self.D_x = np.array([obs.x2 for obs in line_obstacles], dtype=np.float64)
+        self.D_y = np.array([obs.y2 for obs in line_obstacles], dtype=np.float64)
+
+        self.n_obstacles = len(self.C_x)
+        self.weight = weight
+        self.safety_radius = safety_radius
+
+        self.set_num_residuals(self.n_obstacles)
+        self.set_parameter_block_sizes([2, 2])
+
+    def Evaluate(self, parameters, residuals, jacobians):
+        A_x, A_y = parameters[0]
+        B_x, B_y = parameters[1]
+
+        d1, u1_x, u1_y, _ = point_segment_distance(
+            A_x, A_y, self.C_x, self.C_y, self.D_x, self.D_y
+        )
+
+        d2, u2_x, u2_y, _ = point_segment_distance(
+            B_x, B_y, self.C_x, self.C_y, self.D_x, self.D_y
+        )
+
+        d3, u3_x, u3_y, t3 = point_segment_distance(
+            self.C_x, self.C_y, A_x, A_y, B_x, B_y
+        )
+
+        d4, u4_x, u4_y, t4 = point_segment_distance(
+            self.D_x, self.D_y, A_x, A_y, B_x, B_y
+        )
+
+        all_d = np.vstack([d1, d2, d3, d4])
+        min_idx = np.argmin(all_d, axis=0)
+        d_min = all_d[min_idx, np.arange(self.n_obstacles)]
+
+        CD_x, CD_y = self.D_x - self.C_x, self.D_y - self.C_y
+        CA_x, CA_y = A_x - self.C_x, A_y - self.C_y
+        CB_x, CB_y = B_x - self.C_x, B_y - self.C_y
+
+        cp1 = CD_x * CA_y - CD_y * CA_x
+        cp2 = CD_x * CB_y - CD_y * CB_x
+        diff_side_CD = (cp1 * cp2) <= 0.0
+
+        AB_x, AB_y = B_x - A_x, B_y - A_y
+        AC_x, AC_y = self.C_x - A_x, self.C_y - A_y
+        AD_x, AD_y = self.D_x - A_x, self.D_y - A_y
+
+        cp3 = AB_x * AC_y - AB_y * AC_x
+        cp4 = AB_x * AD_y - AB_y * AD_x
+        diff_side_AB = (cp3 * cp4) <= 0.0
+
+        intersect = diff_side_CD & diff_side_AB
+
+        sign_mask = np.where(intersect, -1.0, 1.0)
+        errors = self.safety_radius - sign_mask * d_min
+
+        active_mask = errors > 0.0
+        residuals[:] = np.where(active_mask, self.weight * errors, 0.0)
+
+        if jacobians is not None:
+            inv_d1 = 1.0 / d1
+            inv_d2 = 1.0 / d2
+            inv_d3 = 1.0 / d3
+            inv_d4 = 1.0 / d4
+
+            z = np.zeros(self.n_obstacles)
+
+            gA1_x, gA1_y = u1_x * inv_d1, u1_y * inv_d1
+            gB1_x, gB1_y = z, z
+
+            gA2_x, gA2_y = z, z
+            gB2_x, gB2_y = u2_x * inv_d2, u2_y * inv_d2
+
+            gA3_x, gA3_y = -(1.0 - t3) * u3_x * inv_d3, -(1.0 - t3) * u3_y * inv_d3
+            gB3_x, gB3_y = -t3 * u3_x * inv_d3, -t3 * u3_y * inv_d3
+
+            gA4_x, gA4_y = -(1.0 - t4) * u4_x * inv_d4, -(1.0 - t4) * u4_y * inv_d4
+            gB4_x, gB4_y = -t4 * u4_x * inv_d4, -t4 * u4_y * inv_d4
+
+            gA_x_min = np.choose(min_idx, [gA1_x, gA2_x, gA3_x, gA4_x])
+            gA_y_min = np.choose(min_idx, [gA1_y, gA2_y, gA3_y, gA4_y])
+            gB_x_min = np.choose(min_idx, [gB1_x, gB2_x, gB3_x, gB4_x])
+            gB_y_min = np.choose(min_idx, [gB1_y, gB2_y, gB3_y, gB4_y])
+
+            j_scaler = np.where(active_mask, self.weight * (-sign_mask), 0.0)
+
+            if jacobians[0] is not None:
+                J_A_x = j_scaler * gA_x_min
+                J_A_y = j_scaler * gA_y_min
+                jacobians[0][:] = np.vstack((J_A_x, J_A_y)).T.ravel()
+
+            if jacobians[1] is not None:
+                J_B_x = j_scaler * gB_x_min
+                J_B_y = j_scaler * gB_y_min
+                jacobians[1][:] = np.vstack((J_B_x, J_B_y)).T.ravel()
+
+        return True
+
+
+class SegmentCircleObstaclesCost(pyceres.CostFunction):
     def __init__(
         self,
         circle_obstacles: list[CircleObstacle],
@@ -210,100 +342,76 @@ class SegmentAccelerationCost(pyceres.CostFunction):
         super().__init__()
         self.weight = weight
         self.max_a = max_a
-
         self.set_num_residuals(1)
         self.set_parameter_block_sizes([2, 2, 2, 1, 1])
 
     def Evaluate(self, parameters, residuals, jacobians):
-        A_x, A_y = parameters[0]
-        B_x, B_y = parameters[1]
-        C_x, C_y = parameters[2]
+        A = parameters[0]
+        B = parameters[1]
+        C = parameters[2]
         dt1 = parameters[3][0]
         dt2 = parameters[4][0]
-        if abs(dt1) < 1e-9 or abs(dt2) < 1e-9:
-            return False
 
-        AB_x = B_x - A_x
-        AB_y = B_y - A_y
-        AB_len = np.sqrt(AB_x**2 + AB_y**2 + 1e-10)
+        if dt1 < 1e-5 or dt2 < 1e-5:
+            dt1 = max(dt1, 1e-5)
+            dt2 = max(dt2, 1e-5)
 
-        BC_x = C_x - B_x
-        BC_y = C_y - B_y
-        BC_len = np.sqrt(BC_x**2 + BC_y**2 + 1e-10)
+        vx1 = (B[0] - A[0]) / dt1
+        vy1 = (B[1] - A[1]) / dt1
 
-        dt = dt1 + dt2
+        vx2 = (C[0] - B[0]) / dt2
+        vy2 = (C[1] - B[1]) / dt2
 
-        a = (BC_len / dt2 - AB_len / dt1) * 2 / dt
+        dt_avg = (dt1 + dt2) / 2.0
+        inv_dt_avg = 1.0 / dt_avg
 
-        diff = 0
-        abs_a = abs(a)
-        if abs_a > self.max_a:
-            diff = abs_a - self.max_a
-            sign_a = 1.0 if a > 0 else -1.0
-        else:
-            sign_a = 0.0
+        ax = (vx2 - vx1) * inv_dt_avg
+        ay = (vy2 - vy1) * inv_dt_avg
 
-        w = self.weight
-        residuals[0] = w * diff
+        a_sq = ax**2 + ay**2
+        a_norm = np.sqrt(a_sq + 1e-12)
+
+        diff = a_norm - self.max_a
+        if diff <= 0:
+            residuals[0] = 0.0
+            if jacobians is not None:
+                for i in range(5):
+                    if jacobians[i] is not None:
+                        jacobians[i][:] = 0.0
+            return True
+
+        residuals[0] = self.weight * diff
 
         if jacobians is not None:
-            if abs_a <= self.max_a:
-                if jacobians[0] is not None:
-                    jacobians[0][:] = [0.0, 0.0]
-                if jacobians[1] is not None:
-                    jacobians[1][:] = [0.0, 0.0]
-                if jacobians[2] is not None:
-                    jacobians[2][:] = [0.0, 0.0]
-                if jacobians[3] is not None:
-                    jacobians[3][0] = 0.0
-                if jacobians[4] is not None:
-                    jacobians[4][0] = 0.0
-                return True
+            w_norm = self.weight / a_norm
 
-            dt1_sq = dt1 * dt1
-            dt2_sq = dt2 * dt2
-            dt_sq = dt * dt
+            dax_dA = inv_dt_avg / dt1
+            jac_A = [w_norm * (ax * dax_dA), w_norm * (ay * dax_dA)]
 
-            dx1 = B_x - A_x
-            dx2 = C_x - B_x
-            dy1 = B_y - A_y
-            dy2 = C_y - B_y
+            dax_dC = inv_dt_avg / dt2
+            jac_C = [w_norm * (ax * dax_dC), w_norm * (ay * dax_dC)]
 
-            w = w * sign_a
+            dax_dB = inv_dt_avg * (-1.0 / dt2 - 1.0 / dt1)
+            jac_B = [w_norm * (ax * dax_dB), w_norm * (ay * dax_dB)]
 
-            l1_dt1 = AB_len * dt1
-            l2_dt2 = BC_len * dt2
-            dt_half = dt * 0.5
-            dt_half_1 = l1_dt1 * dt_half
-            inv1 = w / dt_half_1
-            dt_half_2 = l2_dt2 * dt_half
-            inv2 = w / dt_half_2
-            dt_half_12 = l2_dt2 * dt_half_1
-            inv12 = w / dt_half_12
+            d_ax_dt1 = -ax / (2 * dt_avg) + inv_dt_avg * (vx1 / dt1)
+            d_ay_dt1 = -ay / (2 * dt_avg) + inv_dt_avg * (vy1 / dt1)
+            jac_dt1 = w_norm * (ax * d_ax_dt1 + ay * d_ay_dt1)
+
+            d_ax_dt2 = -ax / (2 * dt_avg) - inv_dt_avg * (vx2 / dt2)
+            d_ay_dt2 = -ay / (2 * dt_avg) - inv_dt_avg * (vy2 / dt2)
+            jac_dt2 = w_norm * (ax * d_ax_dt2 + ay * d_ay_dt2)
 
             if jacobians[0] is not None:
-                jacobians[0][:] = [dx1 * inv1, dy1 * inv1]
+                jacobians[0][:] = jac_A
             if jacobians[1] is not None:
-                jacobians[1][:] = [
-                    -(l2_dt2 * dx1 + l1_dt1 * dx2) * inv12,
-                    -(l2_dt2 * dy1 + l1_dt1 * dy2) * inv12,
-                ]
+                jacobians[1][:] = jac_B
             if jacobians[2] is not None:
-                jacobians[2][:] = [dx2 * inv2, dy2 * inv2]
+                jacobians[2][:] = jac_C
             if jacobians[3] is not None:
-                jacobians[3][0] = (
-                    2
-                    * w
-                    * (-BC_len * dt1_sq + AB_len * dt2 * (dt + dt1))
-                    / (dt1_sq * dt2 * dt_sq)
-                )
+                jacobians[3][:] = [jac_dt1]
             if jacobians[4] is not None:
-                jacobians[4][0] = (
-                    2
-                    * w
-                    * (AB_len * dt2_sq - BC_len * dt1 * (dt + dt2))
-                    / (dt2_sq * dt1 * dt_sq)
-                )
+                jacobians[4][:] = [jac_dt2]
 
         return True
 
@@ -379,6 +487,120 @@ class SegmentAngularAccelerationCost(pyceres.CostFunction):
 
             if jacobians[4] is not None:
                 jacobians[4][0] = -factor * omega2 * inv_dt2 - w * alpha * inv_dt
+
+        return True
+
+
+class StartAccelerationCost(pyceres.CostFunction):
+    def __init__(self, weight: float, max_a: float, current_v: tuple[float, float]):
+        super().__init__()
+        self.weight = weight
+        self.max_a = max_a
+        self.vx_start = current_v[0]
+        self.vy_start = current_v[1]
+
+        self.set_num_residuals(1)
+        self.set_parameter_block_sizes([2, 2, 1])
+
+    def Evaluate(self, parameters, residuals, jacobians):
+        P_start = parameters[0]
+        P_next = parameters[1]
+        dt = parameters[2][0]
+
+        if dt < 1e-5:
+            dt = 1e-5
+
+        vx_next = (P_next[0] - P_start[0]) / dt
+        vy_next = (P_next[1] - P_start[1]) / dt
+
+        ax = (vx_next - self.vx_start) / dt
+        ay = (vy_next - self.vy_start) / dt
+
+        a_norm = np.sqrt(ax**2 + ay**2 + 1e-12)
+        diff = a_norm - self.max_a
+
+        if diff <= 0:
+            residuals[0] = 0.0
+            if jacobians:
+                if jacobians[0] is not None:
+                    jacobians[0][:] = 0.0
+                if jacobians[1] is not None:
+                    jacobians[1][:] = 0.0
+                if jacobians[2] is not None:
+                    jacobians[2][:] = 0.0
+            return True
+
+        residuals[0] = self.weight * diff
+
+        if jacobians:
+            w_norm = self.weight / a_norm
+            inv_dt = 1.0 / dt
+            inv_dt_sq = inv_dt * inv_dt
+
+            if jacobians[0] is not None:
+                jacobians[0][:] = 0.0
+            if jacobians[1] is not None:
+                jacobians[1][0] = w_norm * (ax * inv_dt_sq)
+                jacobians[1][1] = w_norm * (ay * inv_dt_sq)
+            if jacobians[2] is not None:
+                d_ax_dt = (-2 * vx_next + self.vx_start) * (inv_dt**2)
+                d_ay_dt = (-2 * vy_next + self.vy_start) * (inv_dt**2)
+                jacobians[2][:] = [w_norm * (ax * d_ax_dt + ay * d_ay_dt)]
+
+        return True
+
+
+class StartAngularAccelerationCost(pyceres.CostFunction):
+    def __init__(self, weight: float, max_alpha: float, current_omega: float):
+        super().__init__()
+        self.weight = weight
+        self.max_alpha = max_alpha
+        self.omega_start = current_omega
+        self.set_parameter_block_sizes([1, 1, 1])
+        self.set_num_residuals(1)
+
+    def Evaluate(self, parameters, residuals, jacobians):
+        th_start = parameters[0][0]
+        th_next = parameters[1][0]
+        dt = parameters[2][0]
+        if dt < 1e-5:
+            dt = 1e-5
+
+        delta_th = th_next - th_start
+        delta_th = (delta_th + np.pi) % (2 * np.pi) - np.pi
+
+        omega_next = delta_th / dt
+        alpha = (omega_next - self.omega_start) / dt
+
+        abs_alpha = abs(alpha)
+        diff = abs_alpha - self.max_alpha
+
+        if diff <= 0:
+            residuals[0] = 0.0
+            if jacobians:
+                for j in jacobians:
+                    if j is not None:
+                        j[:] = 0.0
+            return True
+
+        sign = 1.0 if alpha > 0 else -1.0
+        residuals[0] = self.weight * diff
+
+        if jacobians:
+            w = self.weight * sign
+            inv_dt = 1.0 / dt
+            inv_dt2 = inv_dt * inv_dt
+
+            d_alpha_dth = inv_dt2
+
+            d_alpha_dt = -2 * delta_th * inv_dt * inv_dt2 + self.omega_start * inv_dt2
+
+            if jacobians[0] is not None:
+                jacobians[0][:] = 0.0
+            if jacobians[1] is not None:
+                jacobians[1][:] = [w * d_alpha_dth]
+            if jacobians[2] is not None:
+                jacobians[2][:] = [w * d_alpha_dt]
 
         return True
 
@@ -611,114 +833,126 @@ class TEBPlanner(TrajectoryPlanner):
     def get_length(self):
         return len(self.optimization_xy)
 
-    def _resize_trajectory(self, min_distance: float, max_distance: float): ...  # todo
-
-    def move_start(
-        self, new_xy, new_theta, min_distance: float, max_distance: float
-    ) -> None:
+    def resize_trajectory(self, min_distance: float, max_distance: float):
         """
-        Move the start point (and possibly remove/insert, based on distance to the next point).
-
-        Args:
-            new_xy: np.array of shape (2,) - new start position [x, y]
-            new_theta: np.array of shape (1,) or scalar - new start heading
-            min_distance: float - distance threshold to remove a point
-            max_distance: float - distance threshold to create a point
+        Dynamically adjusts the resolution of the trajectory.
+        Ensures the trajectory always has at least 3 points (Start, Mid, Goal)
+        to prevent segfaults in Ceres Solver caused by all-constant parameter blocks.
         """
         if not self.optimization_xy:
             return
 
-        new_xy = np.asarray(new_xy).reshape(2)
-        new_theta = np.asarray(new_theta).reshape(1)
+        if len(self.optimization_xy) == 2:
+            xy_start = self.optimization_xy[0]
+            xy_goal = self.optimization_xy[1]
 
-        if len(self.optimization_xy) <= 2:
-            self.optimization_xy[0][:] = new_xy
-            self.optimization_theta[0][:] = new_theta
-            return
+            mid_xy = (xy_start + xy_goal) / 2.0
 
-        distance = np.linalg.norm(new_xy - self.optimization_xy[1])
+            th_start = self.optimization_theta[0]
+            th_goal = self.optimization_theta[1]
+            diff = normalize_angle(th_goal - th_start)
+            mid_th = normalize_angle(th_start + diff / 2.0)
 
-        if distance < min_distance:
-            self.optimization_xy.pop(0)
-            self.optimization_theta.pop(0)
             if self.optimization_dt:
-                self.optimization_dt.pop(0)
-            return
+                dt_total = self.optimization_dt[0]
+                half_dt = dt_total / 2.0
+                self.optimization_dt[0] = np.array([half_dt.item()], dtype=np.float64)
+                self.optimization_dt.insert(
+                    1, np.array([half_dt.item()], dtype=np.float64)
+                )
+            else:
+                self.optimization_dt = [np.array([1.0]), np.array([1.0])]
 
-        self.optimization_xy[0][:] = new_xy
-        self.optimization_theta[0][:] = new_theta
-
-        if distance > max_distance:
-            point1_xy = self.optimization_xy[1]
-            self.optimization_xy.insert(
-                1,
-                np.array(
-                    [(new_xy[0] + point1_xy[0]) / 2, (new_xy[1] + point1_xy[1]) / 2]
-                ),
+            self.optimization_xy.insert(1, np.array(mid_xy, dtype=np.float64))
+            self.optimization_theta.insert(
+                1, np.array([mid_th.item()], dtype=np.float64)
             )
 
-            point1_theta = self.optimization_theta[1]
-            diff = normalize_angle(point1_theta - new_theta)
+        i = 0
+        while i < len(self.optimization_xy) - 1:
+            xy_curr = self.optimization_xy[i]
+            xy_next = self.optimization_xy[i + 1]
+            dist = np.linalg.norm(xy_next - xy_curr)
 
-            mean_theta = normalize_angle(new_theta.item() + diff.item() / 2.0)
-            self.optimization_theta.insert(1, np.array([mean_theta], dtype=np.float64))
+            if dist > max_distance:
+                mid_xy = (xy_curr + xy_next) / 2.0
 
-            half_dt = self.optimization_dt[0].item() / 2.0
-            self.optimization_dt[0] = np.array([half_dt], dtype=np.float64)
-            self.optimization_dt.insert(1, np.array([half_dt], dtype=np.float64))
+                th_curr = self.optimization_theta[i]
+                th_next = self.optimization_theta[i + 1]
+                diff = normalize_angle(th_next - th_curr)
+                mid_th = normalize_angle(th_curr + diff / 2.0)
+
+                current_dt = self.optimization_dt[i]
+                half_dt = current_dt / 2.0
+
+                self.optimization_dt[i] = np.array([half_dt.item()], dtype=np.float64)
+
+                self.optimization_xy.insert(i + 1, np.array(mid_xy, dtype=np.float64))
+                self.optimization_theta.insert(
+                    i + 1, np.array([mid_th.item()], dtype=np.float64)
+                )
+                self.optimization_dt.insert(
+                    i + 1, np.array([half_dt.item()], dtype=np.float64)
+                )
+
+                continue
+
+            elif dist < min_distance:
+                if len(self.optimization_xy) <= 3:
+                    i += 1
+                    continue
+
+                if i == 0:
+                    remove_idx = i + 1
+                    new_dt = self.optimization_dt[i] + self.optimization_dt[i + 1]
+                    self.optimization_dt[i] = np.array(
+                        [new_dt.item()], dtype=np.float64
+                    )
+                    self.optimization_dt.pop(i + 1)
+                else:
+                    remove_idx = i
+                    new_dt = self.optimization_dt[i - 1] + self.optimization_dt[i]
+                    self.optimization_dt[i - 1] = np.array(
+                        [new_dt.item()], dtype=np.float64
+                    )
+                    self.optimization_dt.pop(i)
+                    i -= 1
+
+                self.optimization_xy.pop(remove_idx)
+                self.optimization_theta.pop(remove_idx)
+
+                continue
+
+            i += 1
 
     def move_goal(
-        self, new_xy, new_theta, min_distance: float, max_distance: float
+        self,
+        new_xy: tuple[float, float],
+        new_theta: tuple[float],
     ) -> None:
         """
-        Move the goal point (and possibly remove/insert, based on distance to the previous point).
+        Move the goal point.
         """
+        self.goal_pose = np.array([*new_xy, *new_theta])
+
         if not self.optimization_xy:
             return
 
-        new_xy = np.asarray(new_xy).reshape(2)
-        new_theta = np.asarray(new_theta).reshape(1)
+        self.optimization_xy[-1][:] = np.asarray(new_xy).reshape(2)
+        self.optimization_theta[-1][:] = np.asarray(new_theta).reshape(1)
 
-        if len(self.optimization_xy) <= 2:
-            self.optimization_xy[-1][:] = new_xy
-            self.optimization_theta[-1][:] = new_theta
-            return
+    @override
+    def get_distance_goal(self) -> float:
+        """Return the distance to the goal.
 
-        distance = np.linalg.norm(new_xy - self.optimization_xy[-2])
-
-        if distance < min_distance:
-            self.optimization_xy.pop(-1)
-            self.optimization_theta.pop(-1)
-            if self.optimization_dt:
-                self.optimization_dt.pop(-1)
-
-            self.optimization_xy[-1][:] = new_xy
-            self.optimization_theta[-1][:] = new_theta
-            return
-
-        self.optimization_xy[-1][:] = new_xy
-        self.optimization_theta[-1][:] = new_theta
-
-        if distance > max_distance:
-            prev_xy = self.optimization_xy[-2]
-            mid_xy = np.array(
-                [(new_xy[0] + prev_xy[0]) / 2, (new_xy[1] + prev_xy[1]) / 2]
-            )
-
-            prev_theta = self.optimization_theta[-2]
-            diff = normalize_angle(prev_theta - new_theta)
-
-            mean_theta = normalize_angle(new_theta.item() + diff.item() / 2.0)
-            self.optimization_xy.insert(-1, mid_xy)
-            self.optimization_theta.insert(-1, np.array([mean_theta], dtype=np.float64))
-
-            half_dt = self.optimization_dt[-1].item() / 2.0
-            self.optimization_dt[-1] = np.array([half_dt], dtype=np.float64)
-            self.optimization_dt.insert(-1, np.array([half_dt], dtype=np.float64))
+        Returns:
+            The straight line distance to the goal.
+        """
+        return np.linalg.norm(self.optimization_xy[-1] - self.optimization_xy[0]).item()
 
     def transform_trajectory(self, dx: float, dy: float, dtheta: float):
-        """
-        Transforms the internal trajectory guess to account for robot motion.
+        """Transforms the internal trajectory guess to account for robot motion.
+
         This keeps the trajectory aligned with the world while the robot frame moves.
 
         Args:
@@ -752,31 +986,59 @@ class TEBPlanner(TrajectoryPlanner):
         self.optimization_theta[0][:] = np.array([0.0])
 
     @override
-    def refine(self, iterations: int = 10) -> bool:
+    def refine(
+        self,
+        iterations: int = 10,
+        current_velocity: float = 0,
+        current_omega: float = 0,
+    ) -> bool:
         if not self.optimization_xy:
             return False
 
-        self._resize_trajectory(0.1, 2)  # todo: make into constants
+        self.resize_trajectory(0.15, 3)  # todo: make into constants
+
+        if len(self.optimization_xy) <= 2:
+            return False
 
         problem = pyceres.Problem()
 
         circle_obstacles = [
             obs for obs in self.obstacles if isinstance(obs, CircleObstacle)
         ]
+        line_obstacles = [
+            obs for obs in self.obstacles if isinstance(obs, LineObstacle)
+        ]
 
-        obstacle_cost = None
+        circle_cost_func = None
         if circle_obstacles:
-            obstacle_cost = SegmentObstaclesCost(
+            circle_cost_func = SegmentCircleObstaclesCost(
                 circle_obstacles, weight=10.0, safety_radius=1.0
             )
 
+        line_cost_func = None
+        if line_obstacles:
+            line_cost_func = SegmentLineObstaclesCost(
+                line_obstacles, weight=10.0, safety_radius=1.0
+            )
+
+        start_theta = self.optimization_theta[0]
+        start_vx = current_velocity * np.cos(start_theta).item()
+        start_vy = current_velocity * np.sin(start_theta).item()
+        current_velocity_vec = (start_vx, start_vy)
+
         velocity_cost = SegmentVelocityCost(weight=10.0, max_v=self.max_v)
-        acceleration_cost = SegmentAccelerationCost(weight=10.0, max_a=self.max_a)
         angular_velocity_cost = SegmentAngularVelocityCost(
             weight=5.0, max_omega=self.max_v / 2
         )
+        acceleration_cost = SegmentAccelerationCost(weight=10.0, max_a=self.max_a)
         angular_acceleration_cost = SegmentAngularAccelerationCost(
             weight=10.0, max_alpha=self.max_a / 2
+        )
+        start_acceleration_cost = StartAccelerationCost(
+            weight=10.0, max_a=self.max_a, current_v=current_velocity_vec
+        )
+        start_angular_acceleration_cost = StartAngularAccelerationCost(
+            weight=10.0, max_alpha=self.max_a, current_omega=current_omega
         )
         kinematic_cost = SegmentKinematicsCost(weight=10.0)
         heading_cost = SegmentHeadingCost(weight=10.0)
@@ -793,8 +1055,11 @@ class TEBPlanner(TrajectoryPlanner):
             theta_curr = self.optimization_theta[i]
             theta_next = self.optimization_theta[i + 1]
 
-            if obstacle_cost is not None:
-                problem.add_residual_block(obstacle_cost, None, [xy_curr, xy_next])
+            if circle_cost_func is not None:
+                problem.add_residual_block(circle_cost_func, None, [xy_curr, xy_next])
+
+            if line_cost_func is not None:
+                problem.add_residual_block(line_cost_func, None, [xy_curr, xy_next])
 
             problem.add_residual_block(velocity_cost, None, [xy_curr, xy_next, dt])
             problem.add_residual_block(
@@ -802,17 +1067,17 @@ class TEBPlanner(TrajectoryPlanner):
             )
 
             if i < n_points - 2:
-                # problem.add_residual_block(
-                #     acceleration_cost,
-                #     None,
-                #     [
-                #         xy_curr,
-                #         xy_next,
-                #         self.optimization_xy[i + 2],
-                #         dt,
-                #         self.optimization_dt[i + 1],
-                #     ],
-                # )
+                problem.add_residual_block(
+                    acceleration_cost,
+                    None,
+                    [
+                        xy_curr,
+                        xy_next,
+                        self.optimization_xy[i + 2],
+                        dt,
+                        self.optimization_dt[i + 1],
+                    ],
+                )
                 problem.add_residual_block(
                     angular_acceleration_cost,
                     None,
@@ -823,6 +1088,13 @@ class TEBPlanner(TrajectoryPlanner):
                         dt,
                         self.optimization_dt[i + 1],
                     ],
+                )
+            if i == 0:
+                problem.add_residual_block(
+                    start_acceleration_cost, None, [xy_curr, xy_next, dt]
+                )
+                problem.add_residual_block(
+                    start_angular_acceleration_cost, None, [theta_curr, theta_next, dt]
                 )
 
             problem.add_residual_block(

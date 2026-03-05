@@ -8,7 +8,7 @@ After starting the container for the first time run `./init.sh` and `./build.sh`
 
 Relaunch the shell
 
-Run the simulation of your choice (e.g. `ros2 launch custom_simulation.launch.py setup_path:=/workspace/husky-sim/husky_config slam:=false nav2:=true world:=sonoma z:=35`)
+Run the simulation of your choice (e.g. `ros2 launch custom_simulation.launch.py setup_path:=/workspace/husky-sim/husky_config slam:=false nav2:=true world:=sonoma origin:=-22.986687,-43.202501,35.0 spawn:=-22.98787540402462,-43.19982241436838,38.107444597408175`)
 
 Lastly, `ros2 run goof_an_odd_husky controller_node`
 

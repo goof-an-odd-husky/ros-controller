@@ -1140,7 +1140,7 @@ class TEBPlanner(TrajectoryPlanner):
             )
             if close_circles:
                 circle_cost = SegmentCircleObstaclesCost(
-                    close_circles, weight=40.0, safety_radius=self.safety_radius
+                    close_circles, weight=50.0, safety_radius=self.safety_radius
                 )
                 problem.add_residual_block(circle_cost, None, [xy_curr, xy_next])
 
@@ -1149,7 +1149,7 @@ class TEBPlanner(TrajectoryPlanner):
             )
             if close_lines:
                 line_cost = SegmentLineObstaclesCost(
-                    close_lines, weight=40.0, safety_radius=self.safety_radius
+                    close_lines, weight=50.0, safety_radius=self.safety_radius
                 )
                 problem.add_residual_block(line_cost, None, [xy_curr, xy_next])
 

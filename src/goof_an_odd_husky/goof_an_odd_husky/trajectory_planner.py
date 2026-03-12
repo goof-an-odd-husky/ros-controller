@@ -47,14 +47,16 @@ class ObstacleExtractor(ABC):
 
 
 class CircleExtractor(ObstacleExtractor):
-    """Extracts circular obstacles from point clusters."""
+    """Extracts circular obstacles from point clusters, biased away from the vehicle."""
 
-    def __init__(self, min_radius: float = 0.1):
+    def __init__(self, min_radius: float = 0.1, bias_factor: float = 0.2):
         self.min_radius = min_radius
+        self.bias_factor = bias_factor
 
     def extract(self, clusters: list[NDArray[np.floating]]) -> list[Obstacle]:
         """
-        Fits a bounding circle to each cluster.
+        Fits a bounding circle to each cluster, biasing the center away from
+        the vehicle (origin) to better cover the unobserved backside of obstacles.
         """
         obstacles = []
         for cluster in clusters:
@@ -62,15 +64,28 @@ class CircleExtractor(ObstacleExtractor):
                 continue
 
             center = np.mean(cluster, axis=0)
-
             if len(cluster) == 1:
                 radius = self.min_radius
-            else:
-                radius = float(np.max(np.linalg.norm(cluster - center, axis=1)))
+                obstacles.append(
+                    CircleObstacle(x=center[0], y=center[1], radius=radius)
+                )
+                continue
+
+            dists = np.linalg.norm(cluster - center, axis=1)
+            radius = float(np.max(dists))
+
+            dist_to_center = np.linalg.norm(center)
+            if dist_to_center > 1e-6:
+                direction = center / dist_to_center
+                shift_amount = radius * self.bias_factor
+                center = center + direction * shift_amount
+
+            final_dists = np.linalg.norm(cluster - center, axis=1)
+            final_radius = float(np.max(final_dists))
 
             obstacles.append(
                 CircleObstacle(
-                    x=center[0], y=center[1], radius=max(radius, self.min_radius)
+                    x=center[0], y=center[1], radius=max(final_radius, self.min_radius)
                 )
             )
 
@@ -78,31 +93,50 @@ class CircleExtractor(ObstacleExtractor):
 
 
 class LineExtractor(ObstacleExtractor):
-    """Extracts line obstacles from point clusters."""
+    """Extracts line obstacles from point clusters using recursive split-and-merge."""
+
+    def __init__(self, max_distance: float = 0.5):
+        self.max_distance = max_distance
 
     def extract(self, clusters: list[NDArray[np.floating]]) -> list[Obstacle]:
         """
-        Fits a naive line to each cluster by connecting the two furthest points.
+        Fits lines to clusters by recursively splitting segments
+        where the point-to-line distance exceeds max_distance.
         """
         obstacles = []
         for cluster in clusters:
             if len(cluster) < 2:
                 continue
 
-            # todo: Placeholder implementation: find two furthest spread points
-            max_dist = -1
-            p1, p2 = cluster[0], cluster[1]
-
-            for i in range(len(cluster)):
-                dists = np.linalg.norm(cluster - cluster[i], axis=1)
-                furthest_idx = int(np.argmax(dists))
-                if dists[furthest_idx] > max_dist:
-                    max_dist = float(dists[furthest_idx])
-                    p1, p2 = cluster[i], cluster[furthest_idx]
-
-            obstacles.append(LineObstacle(x1=p1[0], y1=p1[1], x2=p2[0], y2=p2[1]))
+            obstacles.extend(self._fit_recursive(cluster))
 
         return obstacles
+
+    def _fit_recursive(self, points: NDArray[np.floating]) -> list[Obstacle]:
+        if len(points) < 2:
+            return []
+
+        p1 = points[0]
+        p2 = points[-1]
+        line_vec = p2 - p1
+        line_len = np.linalg.norm(line_vec)
+
+        if line_len < 1e-6:
+            return []
+
+        vecs = points - p1
+        cross_products = vecs[:, 0] * line_vec[1] - vecs[:, 1] * line_vec[0]
+        distances = np.abs(cross_products) / line_len
+
+        max_idx = np.argmax(distances)
+        max_dist = float(distances[max_idx])
+
+        if max_dist > self.max_distance and len(points) > 2:
+            left_lines = self._fit_recursive(points[: max_idx + 1])
+            right_lines = self._fit_recursive(points[max_idx:])
+            return left_lines + right_lines
+        else:
+            return [LineObstacle(x1=p1[0], y1=p1[1], x2=p2[0], y2=p2[1])]
 
 
 class ObstaclePipeline:

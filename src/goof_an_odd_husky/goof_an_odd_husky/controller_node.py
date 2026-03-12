@@ -242,6 +242,22 @@ class ControllerNode(Node):
             odom_g.twist.twist.angular.z,
         )
 
+        orientation = odom_g.pose.pose.orientation
+        yaw = Rotation.from_quat(
+            [orientation.x, orientation.y, orientation.z, orientation.w]
+        ).as_euler("zyx")[0]
+
+        with self.viz_lock:
+            self.current_robot_pose_global = [
+                odom_g.pose.pose.position.x,
+                odom_g.pose.pose.position.y,
+                yaw,
+            ]
+
+            if goal_lat_lon is None:
+                self.pending_start_goal = ([0.0, 0.0, 0.0], [])
+                self.pending_trajectory = np.array([])
+
         detected_obstacles = self._process_obstacles(scan, scan_time)
         t2 = time.perf_counter()
         performance["Obstacle processing"] = round((t2 - t1) * 1000, 2)
@@ -271,12 +287,19 @@ class ControllerNode(Node):
             self._publish_velocity(0.0, 0.0)
             return
 
+        with self.viz_lock:
+            self.pending_start_goal = pending_start_goal
+
         if self.planner.get_distance_goal() < 1.0:
             if not self.goal_reached:
                 self.goal_reached = True
                 self.get_logger().info("Goal Reached")
                 self._publish_velocity(0.0, 0.0)
                 self.goal_lat_lon = None
+
+                with self.viz_lock:
+                    self.pending_start_goal = ([0.0, 0.0, 0.0], [])
+                    self.pending_trajectory = np.array([])
             return
 
         self.goal_reached = False
@@ -342,9 +365,6 @@ class ControllerNode(Node):
             self.planner.plan()
             self.needs_initial_plan = False
 
-        with self.viz_lock:
-            self.current_robot_pose_global = [vehicle_x, vehicle_y, yaw]
-
         return (self.initial_start, [local_x, local_y, 0.0])
 
     def _process_obstacles(self, scan, scan_time) -> list | None:
@@ -371,14 +391,11 @@ class ControllerNode(Node):
                 self.pending_start_goal,
             )
             rx, ry, rtheta = self.current_robot_pose_global
-            self.pending_trajectory = self.pending_obstacles = (
-                self.pending_start_goal
-            ) = None
-        if trajectory is None and obstacles is None:
+        if trajectory is None and obstacles is None and start_goal is None:
             return
         if self.visualizer.use_global:
             c, s = np.cos(rtheta), np.sin(rtheta)
-            if trajectory is not None:
+            if trajectory is not None and len(trajectory) > 0:
                 gtraj = trajectory.copy()
                 gtraj[:, 0], gtraj[:, 1] = (
                     rx + trajectory[:, 0] * c - trajectory[:, 1] * s,
@@ -408,8 +425,15 @@ class ControllerNode(Node):
             if start_goal is not None:
                 st, gl = start_goal
                 gsx, gsy = rx + st[0] * c - st[1] * s, ry + st[0] * s + st[1] * c
-                ggx, ggy = rx + gl[0] * c - gl[1] * s, ry + gl[0] * s + gl[1] * c
-                start_goal = ([gsx, gsy, st[2] + rtheta], [ggx, ggy, gl[2] + rtheta])
+
+                if len(gl) >= 3:
+                    ggx, ggy = rx + gl[0] * c - gl[1] * s, ry + gl[0] * s + gl[1] * c
+                    start_goal = (
+                        [gsx, gsy, st[2] + rtheta],
+                        [ggx, ggy, gl[2] + rtheta],
+                    )
+                else:
+                    start_goal = ([gsx, gsy, st[2] + rtheta], [])
         if start_goal:
             self.visualizer.set_start_goal(*start_goal)
         if obstacles:

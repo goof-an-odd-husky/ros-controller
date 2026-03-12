@@ -853,7 +853,7 @@ class TEBPlanner(TrajectoryPlanner):
         max_v: float,
         max_a: float,
         initial_step: float = 3.0,
-        safety_radius: float = 1.5,
+        safety_radius: float = 2.0,
     ):
         self.setup_poses(start_pose, goal_pose)
         self.max_v = max_v
@@ -1122,7 +1122,7 @@ class TEBPlanner(TrajectoryPlanner):
         time_cost = SegmentTimeCost(weight=10.0)
 
         obstacle_filter = ObstacleFilter(
-            circle_obstacles, line_obstacles, self.safety_radius * 2
+            circle_obstacles, line_obstacles, self.safety_radius * 2.5
         )
 
         n_points = len(self.optimization_xy)

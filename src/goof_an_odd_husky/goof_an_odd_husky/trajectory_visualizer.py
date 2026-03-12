@@ -263,9 +263,13 @@ class TrajectoryVisualizer:
         goal: NDArray[np.floating] | list[float],
     ) -> None:
         sx, sy = self._to_canvas(start[0], start[1])
-        gx, gy = self._to_canvas(goal[0], goal[1])
         self._start_item.setData([sx], [sy])
-        self._goal_item.setData([gx], [gy])
+
+        if len(goal) >= 2:
+            gx, gy = self._to_canvas(goal[0], goal[1])
+            self._goal_item.setData([gx], [gy])
+        else:
+            self._goal_item.setData([], [])
 
     def set_obstacles(self, obstacles: list[Obstacle]) -> None:
         if not self._is_open:
@@ -275,6 +279,10 @@ class TrajectoryVisualizer:
 
     def update_trajectory(self, poses: NDArray[np.floating] | None) -> None:
         if poses is None or len(poses) == 0:
+            self._traj_item.setData([], [])
+            if self._traj_straight_item is not None:
+                self._traj_straight_item.setData([], [])
+            self._arrows_item.setData([], [])
             return
 
         transformed = poses.copy()

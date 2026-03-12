@@ -35,6 +35,92 @@ def point_segment_distance(Px, Py, S1x, S1y, S2x, S2y):
     return d, u_x, u_y, t
 
 
+class ObstacleFilter:
+    def __init__(self, circle_obstacles, line_obstacles, safety_radius):
+        self.safety_radius = safety_radius
+
+        self.circle_obstacles = circle_obstacles
+        self.line_obstacles = line_obstacles
+
+        if self.circle_obstacles:
+            self.circ_x = np.array([o.x for o in circle_obstacles], dtype=np.float64)
+            self.circ_y = np.array([o.y for o in circle_obstacles], dtype=np.float64)
+            self.circ_r = np.array(
+                [o.radius for o in circle_obstacles], dtype=np.float64
+            )
+
+        if self.line_obstacles:
+            self.line_cx = np.array([o.x1 for o in line_obstacles], dtype=np.float64)
+            self.line_cy = np.array([o.y1 for o in line_obstacles], dtype=np.float64)
+            self.line_dx = np.array([o.x2 for o in line_obstacles], dtype=np.float64)
+            self.line_dy = np.array([o.y2 for o in line_obstacles], dtype=np.float64)
+
+    def get_close_circles(self, A_x: float, A_y: float, B_x: float, B_y: float):
+        if not self.circle_obstacles:
+            return []
+
+        AB_x = B_x - A_x
+        AB_y = B_y - A_y
+        AB_len_sq = max(AB_x**2 + AB_y**2, 1e-10)
+
+        AO_x = self.circ_x - A_x
+        AO_y = self.circ_y - A_y
+
+        t = (AO_x * AB_x + AO_y * AB_y) / AB_len_sq
+        t = np.clip(t, 0.0, 1.0)
+
+        O1O_x = AO_x - t * AB_x
+        O1O_y = AO_y - t * AB_y
+
+        dist = np.sqrt(O1O_x**2 + O1O_y**2)
+
+        mask = dist <= (self.circ_r + self.safety_radius + 0.1)
+
+        return [obs for i, obs in enumerate(self.circle_obstacles) if mask[i]]
+
+    def get_close_lines(self, A_x: float, A_y: float, B_x: float, B_y: float):
+        if not self.line_obstacles:
+            return []
+
+        d1, _, _, _ = point_segment_distance(
+            A_x, A_y, self.line_cx, self.line_cy, self.line_dx, self.line_dy
+        )
+        d2, _, _, _ = point_segment_distance(
+            B_x, B_y, self.line_cx, self.line_cy, self.line_dx, self.line_dy
+        )
+        d3, _, _, _ = point_segment_distance(
+            self.line_cx, self.line_cy, A_x, A_y, B_x, B_y
+        )
+        d4, _, _, _ = point_segment_distance(
+            self.line_dx, self.line_dy, A_x, A_y, B_x, B_y
+        )
+
+        all_d = np.vstack([d1, d2, d3, d4])
+        min_dist = np.min(all_d, axis=0)
+
+        CD_x, CD_y = self.line_dx - self.line_cx, self.line_dy - self.line_cy
+        CA_x, CA_y = A_x - self.line_cx, A_y - self.line_cy
+        CB_x, CB_y = B_x - self.line_cx, B_y - self.line_cy
+
+        cp1 = CD_x * CA_y - CD_y * CA_x
+        cp2 = CD_x * CB_y - CD_y * CB_x
+        diff_side_CD = (cp1 * cp2) <= 0.0
+
+        AB_x, AB_y = B_x - A_x, B_y - A_y
+        AC_x, AC_y = self.line_cx - A_x, self.line_cy - A_y
+        AD_x, AD_y = self.line_dx - A_x, self.line_dy - A_y
+
+        cp3 = AB_x * AC_y - AB_y * AC_x
+        cp4 = AB_x * AD_y - AB_y * AD_x
+        diff_side_AB = (cp3 * cp4) <= 0.0
+
+        intersect = diff_side_CD & diff_side_AB
+
+        mask = intersect | (min_dist <= (self.safety_radius + 0.1))
+
+        return [obs for i, obs in enumerate(self.line_obstacles) if mask[i]]
+
+
 class SegmentLineObstaclesCost(pyceres.CostFunction):
     def __init__(
         self,
@@ -767,11 +853,13 @@ class TEBPlanner(TrajectoryPlanner):
         max_v: float,
         max_a: float,
         initial_step: float = 3.0,
+        safety_radius: float = 1.5,
     ):
         self.setup_poses(start_pose, goal_pose)
         self.max_v = max_v
         self.max_a = max_a
         self.initial_step = initial_step
+        self.safety_radius = safety_radius
 
         # pyceres binds to the memory of these specific numpy arrays
         # therefore we have save lists long-term
@@ -995,7 +1083,7 @@ class TEBPlanner(TrajectoryPlanner):
         if not self.optimization_xy:
             return False
 
-        self.resize_trajectory(0.5, 6)  # todo: make into constants
+        self.resize_trajectory(1, 6)  # todo: make into constants
 
         if len(self.optimization_xy) <= 2:
             return False
@@ -1008,18 +1096,6 @@ class TEBPlanner(TrajectoryPlanner):
         line_obstacles = [
             obs for obs in self.obstacles if isinstance(obs, LineObstacle)
         ]
-
-        circle_cost_func = None
-        if circle_obstacles:
-            circle_cost_func = SegmentCircleObstaclesCost(
-                circle_obstacles, weight=40.0, safety_radius=1.5
-            )
-
-        line_cost_func = None
-        if line_obstacles:
-            line_cost_func = SegmentLineObstaclesCost(
-                line_obstacles, weight=40.0, safety_radius=1.5
-            )
 
         start_theta = self.optimization_theta[0]
         start_vx = current_velocity * np.cos(start_theta).item()
@@ -1045,6 +1121,10 @@ class TEBPlanner(TrajectoryPlanner):
         angular_smoothing_cost = SegmentAngularSmoothingCost(weight=0.5)
         time_cost = SegmentTimeCost(weight=10.0)
 
+        obstacle_filter = ObstacleFilter(
+            circle_obstacles, line_obstacles, self.safety_radius * 2
+        )
+
         n_points = len(self.optimization_xy)
 
         for i in range(n_points - 1):
@@ -1055,11 +1135,23 @@ class TEBPlanner(TrajectoryPlanner):
             theta_curr = self.optimization_theta[i]
             theta_next = self.optimization_theta[i + 1]
 
-            if circle_cost_func is not None:
-                problem.add_residual_block(circle_cost_func, None, [xy_curr, xy_next])
+            close_circles = obstacle_filter.get_close_circles(
+                xy_curr[0], xy_curr[1], xy_next[0], xy_next[1]
+            )
+            if close_circles:
+                circle_cost = SegmentCircleObstaclesCost(
+                    close_circles, weight=40.0, safety_radius=self.safety_radius
+                )
+                problem.add_residual_block(circle_cost, None, [xy_curr, xy_next])
 
-            if line_cost_func is not None:
-                problem.add_residual_block(line_cost_func, None, [xy_curr, xy_next])
+            close_lines = obstacle_filter.get_close_lines(
+                xy_curr[0], xy_curr[1], xy_next[0], xy_next[1]
+            )
+            if close_lines:
+                line_cost = SegmentLineObstaclesCost(
+                    close_lines, weight=40.0, safety_radius=self.safety_radius
+                )
+                problem.add_residual_block(line_cost, None, [xy_curr, xy_next])
 
             problem.add_residual_block(velocity_cost, None, [xy_curr, xy_next, dt])
             problem.add_residual_block(
@@ -1117,7 +1209,11 @@ class TEBPlanner(TrajectoryPlanner):
 
         options = pyceres.SolverOptions()
         options.max_num_iterations = iterations
-        options.linear_solver_type = pyceres.LinearSolverType.DENSE_QR
+        options.function_tolerance = 1e-4
+        options.gradient_tolerance = 1e-4
+        options.parameter_tolerance = 1e-4
+        options.num_threads = 4
+        options.linear_solver_type = pyceres.LinearSolverType.SPARSE_NORMAL_CHOLESKY
         options.minimizer_progress_to_stdout = False
 
         summary = pyceres.SolverSummary()

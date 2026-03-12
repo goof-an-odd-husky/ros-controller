@@ -32,7 +32,7 @@ class ControllerNode(Node):
     control_callback_group: MutuallyExclusiveCallbackGroup
     velocity_publisher: rclpy.publisher.Publisher
     lidar_subscription: rclpy.subscription.Subscription
-    gps_subscription: rclpy.subscription.Subscription
+    gps_subscription: rclpy.subscription.Subscription | None
     odom_subscription: rclpy.subscription.Subscription
     control_timer: rclpy.timer.Timer
     data_lock: threading.Lock
@@ -56,11 +56,14 @@ class ControllerNode(Node):
     goal_lat_lon: tuple[float, float] | None
     needs_initial_plan: bool
     last_time_ns: int
+    use_gps: bool
 
-    def __init__(self, debug: bool = False) -> None:
+    def __init__(self, debug: bool = False, use_gps: bool = True) -> None:
         super().__init__("controller_node")
         if debug:
             self.get_logger().set_level(rclpy.logging.LoggingSeverity.DEBUG)
+
+        self.use_gps = use_gps
 
         self.sensor_callback_group = MutuallyExclusiveCallbackGroup()
         self.control_callback_group = MutuallyExclusiveCallbackGroup()
@@ -77,13 +80,15 @@ class ControllerNode(Node):
             callback_group=self.sensor_callback_group,
         )
 
-        self.gps_subscription = self.create_subscription(
-            NavSatFix,
-            "/husky/sensors/gps_0/fix",
-            self.gps_callback,
-            10,
-            callback_group=self.sensor_callback_group,
-        )
+        self.gps_subscription = None
+        if self.use_gps:
+            self.gps_subscription = self.create_subscription(
+                NavSatFix,
+                "/husky/sensors/gps_0/fix",
+                self.gps_callback,
+                10,
+                callback_group=self.sensor_callback_group,
+            )
 
         self.odom_subscription = self.create_subscription(
             Odometry,
@@ -139,7 +144,9 @@ class ControllerNode(Node):
             self.goal_reached = False
             self.planner = TEBPlanner(self.initial_start, self.initial_goal, 1, 2)
             self.needs_initial_plan = True
-        self.get_logger().info(f"New goal set: lat={latitude}, lon={longitude}")
+        self.get_logger().info(
+            f"New goal set: {'lat=' if self.use_gps else 'x='}{latitude}, {'lon=' if self.use_gps else 'y='}{longitude}"
+        )
 
     def lidar_callback(self, msg: LaserScan) -> None:
         with self.data_lock:
@@ -225,7 +232,7 @@ class ControllerNode(Node):
                 "Waiting for Fused Odometry...", throttle_duration_sec=2.0
             )
             return
-        if gps_data is None:
+        if self.use_gps and gps_data is None:
             self.get_logger().warn("Waiting for GPS...", throttle_duration_sec=2.0)
             return
 
@@ -304,31 +311,40 @@ class ControllerNode(Node):
         self.last_processed_odom = odom_g
 
     def _update_local_goal(self, goal_lat_lon, odom_g) -> tuple | None:
-        if not self.first_gps:
-            self.get_logger().warn(
-                "Waiting for GPS anchor...", throttle_duration_sec=2.0
+        if self.use_gps:
+            if not self.first_gps:
+                self.get_logger().warn(
+                    "Waiting for GPS anchor...", throttle_duration_sec=2.0
+                )
+                return None
+            global_x, global_y = gps_to_vector(
+                self.first_gps.latitude,
+                self.first_gps.longitude,
+                goal_lat_lon[0],
+                goal_lat_lon[1],
             )
-            return None
-        global_x, global_y = gps_to_vector(
-            self.first_gps.latitude,
-            self.first_gps.longitude,
-            goal_lat_lon[0],
-            goal_lat_lon[1],
-        )
+        else:
+            global_x, global_y = goal_lat_lon[0], goal_lat_lon[1]
+
         vehicle_x, vehicle_y = odom_g.pose.pose.position.x, odom_g.pose.pose.position.y
         orientation = odom_g.pose.pose.orientation
         yaw = Rotation.from_quat(
             [orientation.x, orientation.y, orientation.z, orientation.w]
         ).as_euler("zyx")[0]
+
         dx, dy = global_x - vehicle_x, global_y - vehicle_y
         c, s = np.cos(-yaw), np.sin(-yaw)
         local_x, local_y = dx * c - dy * s, dx * s + dy * c
+
         self.planner.move_goal((local_x, local_y), (0.0,))
+
         if self.needs_initial_plan:
             self.planner.plan()
             self.needs_initial_plan = False
+
         with self.viz_lock:
             self.current_robot_pose_global = [vehicle_x, vehicle_y, yaw]
+
         return (self.initial_start, [local_x, local_y, 0.0])
 
     def _process_obstacles(self, scan, scan_time) -> list | None:
@@ -406,7 +422,7 @@ class ControllerNode(Node):
 def main(args=None) -> None:
     rclpy.init(args=args)
 
-    controller_node = ControllerNode(debug=True)
+    controller_node = ControllerNode(debug=True, use_gps=False)
 
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(controller_node)

@@ -83,6 +83,25 @@ def _compute_arc_path(
     return np.array(all_x), np.array(all_y)
 
 
+def _get_vehicle_poly(
+    x: float, y: float, theta: float, scale: float = 0.5
+) -> tuple[list[float], list[float]]:
+    """Calculates the vertices for an arrow/kite shape to represent the vehicle."""
+    pts = np.array(
+        [
+            [scale, 0.0],
+            [-scale / 2, scale / 2],
+            [-scale / 4, 0.0],
+            [-scale / 2, -scale / 2],
+            [scale, 0.0],
+        ]
+    )
+    c, s = np.cos(theta), np.sin(theta)
+    R = np.array([[c, -s], [s, c]])
+    t_pts = pts @ R.T + np.array([x, y])
+    return t_pts[:, 0].tolist(), t_pts[:, 1].tolist()
+
+
 class TrajectoryVisualizer:
     _is_open: bool
     interactive_obstacles: bool
@@ -91,13 +110,14 @@ class TrajectoryVisualizer:
     start_pos: list[float] | None
     goal_pos: list[float] | None
     use_global: bool
+    use_gps: bool
     path_render_mode: PathRenderMode
     _app: QtWidgets.QApplication
     _win: QtWidgets.QMainWindow
     _plot: pg.PlotWidget
     _traj_item: pg.PlotDataItem
     _traj_straight_item: pg.PlotDataItem | None
-    _start_item: pg.ScatterPlotItem
+    _start_item: pg.PlotDataItem
     _goal_item: pg.ScatterPlotItem
     _obstacle_item: pg.PlotDataItem
     _arrows_item: pg.PlotDataItem
@@ -113,6 +133,7 @@ class TrajectoryVisualizer:
         path_render_mode: PathRenderMode | str = PathRenderMode.STRAIGHT,
         interactive_obstacles: bool = True,
         use_global: bool = False,
+        use_gps: bool = True,
         on_goal_set: Callable[[float, float], None] | None = None,
     ) -> None:
         self._is_open = True
@@ -123,7 +144,13 @@ class TrajectoryVisualizer:
         self.start_pos = None
         self.goal_pos = None
         self.use_global = use_global
+        self.use_gps = use_gps
         self.on_goal_set = on_goal_set
+
+        self._robot_pose = (0.0, 0.0, 0.0)
+        self._raw_trajectory = None
+        self._raw_obstacles = None
+        self._raw_start_goal = None
 
         if isinstance(path_render_mode, str):
             path_render_mode = PathRenderMode(path_render_mode)
@@ -143,9 +170,14 @@ class TrajectoryVisualizer:
         input_panel = QtWidgets.QWidget()
         input_layout = QtWidgets.QHBoxLayout(input_panel)
 
-        coord_label = QtWidgets.QLabel("Goal (lat, lon):")
+        label_text = "Goal (lat, lon):" if self.use_gps else "Goal (x, y):"
+        placeholder_text = (
+            "e.g., 37.7749, -122.4194" if self.use_gps else "e.g., 5.0, 0.0"
+        )
+
+        coord_label = QtWidgets.QLabel(label_text)
         self._coord_input = QtWidgets.QLineEdit()
-        self._coord_input.setPlaceholderText("e.g., 37.7749, -122.4194")
+        self._coord_input.setPlaceholderText(placeholder_text)
         self._coord_input.setMinimumWidth(200)
         self._coord_input.returnPressed.connect(self._on_set_goal_clicked)
 
@@ -195,13 +227,12 @@ class TrajectoryVisualizer:
                 symbolPen=None,
             )
 
-        self._start_item = pg.ScatterPlotItem(
-            symbol="s", size=14, brush=pg.mkBrush("g"), pen=pg.mkPen(None), zValue=5
-        )
+        self._start_item = self._plot.plot([], [], pen=pg.mkPen("r", width=3))
+        self._start_item.setZValue(5)
+
         self._goal_item = pg.ScatterPlotItem(
             symbol="star", size=18, brush=pg.mkBrush("r"), pen=pg.mkPen(None), zValue=5
         )
-        self._plot.addItem(self._start_item)
         self._plot.addItem(self._goal_item)
 
         self._obstacle_item = self._plot.plot(
@@ -226,22 +257,27 @@ class TrajectoryVisualizer:
 
         parts = [p.strip() for p in text.split(",")]
         if len(parts) != 2:
-            print("Invalid format. Use: latitude, longitude (e.g., 37.7749, -122.4194)")
+            if self.use_gps:
+                print(
+                    "Invalid format. Use: latitude, longitude (e.g., 37.7749, -122.4194)"
+                )
+            else:
+                print("Invalid format. Use: x, y (e.g., 5.0, 0.0)")
             return
 
         try:
-            lat = float(parts[0])
-            lon = float(parts[1])
+            val1 = float(parts[0])
+            val2 = float(parts[1])
             if self.on_goal_set:
-                self.on_goal_set(lat, lon)
+                self.on_goal_set(val1, val2)
         except ValueError:
-            print("Invalid coordinates. Use numeric values for latitude and longitude")
+            print("Invalid coordinates. Use numeric values.")
 
     def _on_key_pressed(self, event) -> None:
         if event.key() == QtCore.Qt.Key.Key_G:
             self.use_global = not self.use_global
             print(f"Visualization mode: {'Global' if self.use_global else 'Robot'}")
-            self._redraw_obstacles()
+            self._process_and_update()
 
     def _to_canvas(self, x: float, y: float) -> tuple[float, float]:
         if self.use_global:
@@ -257,13 +293,95 @@ class TrajectoryVisualizer:
     def is_open(self) -> bool:
         return self._is_open
 
+    def update_world_state(
+        self,
+        robot_pose: tuple[float, float, float] | list[float],
+        trajectory: NDArray[np.floating] | None,
+        obstacles: list[Obstacle] | None,
+        start_goal: tuple[list[float], list[float]] | None,
+    ) -> None:
+        """Stores the raw local state and triggers a full visual update."""
+        self._robot_pose = robot_pose
+        self._raw_trajectory = trajectory
+        self._raw_obstacles = obstacles
+        self._raw_start_goal = start_goal
+
+        self._process_and_update()
+
+    def _process_and_update(self) -> None:
+        """Applies coordinate transformations based on the current view mode."""
+        rx, ry, rtheta = self._robot_pose
+        c, s = np.cos(rtheta), np.sin(rtheta)
+
+        if self._raw_trajectory is not None and len(self._raw_trajectory) > 0:
+            if self.use_global:
+                gtraj = self._raw_trajectory.copy()
+                gtraj[:, 0] = (
+                    rx + self._raw_trajectory[:, 0] * c - self._raw_trajectory[:, 1] * s
+                )
+                gtraj[:, 1] = (
+                    ry + self._raw_trajectory[:, 0] * s + self._raw_trajectory[:, 1] * c
+                )
+                gtraj[:, 2] = self._raw_trajectory[:, 2] + rtheta
+                self.update_trajectory(gtraj)
+            else:
+                self.update_trajectory(self._raw_trajectory)
+        else:
+            self.update_trajectory(None)
+
+        if self._raw_obstacles is not None:
+            if self.use_global:
+                graphical_obs = []
+                for o in self._raw_obstacles:
+                    if isinstance(o, CircleObstacle):
+                        graphical_obs.append(
+                            CircleObstacle(
+                                rx + o.x * c - o.y * s, ry + o.x * s + o.y * c, o.radius
+                            )
+                        )
+                    elif isinstance(o, LineObstacle):
+                        graphical_obs.append(
+                            LineObstacle(
+                                rx + o.x1 * c - o.y1 * s,
+                                ry + o.x1 * s + o.y1 * c,
+                                rx + o.x2 * c - o.y2 * s,
+                                ry + o.x2 * s + o.y2 * c,
+                            )
+                        )
+                self.set_obstacles(graphical_obs)
+            else:
+                self.set_obstacles(self._raw_obstacles)
+
+        if self._raw_start_goal is not None:
+            st, gl = self._raw_start_goal
+            if self.use_global:
+                gsx, gsy = rx + st[0] * c - st[1] * s, ry + st[0] * s + st[1] * c
+                if len(gl) >= 3:
+                    ggx, ggy = rx + gl[0] * c - gl[1] * s, ry + gl[0] * s + gl[1] * c
+                    self.set_start_goal(
+                        [gsx, gsy, st[2] + rtheta], [ggx, ggy, gl[2] + rtheta]
+                    )
+                else:
+                    self.set_start_goal([gsx, gsy, st[2] + rtheta], [])
+            else:
+                self.set_start_goal(st, gl)
+
     def set_start_goal(
         self,
         start: NDArray[np.floating] | list[float],
         goal: NDArray[np.floating] | list[float],
     ) -> None:
         sx, sy = self._to_canvas(start[0], start[1])
-        self._start_item.setData([sx], [sy])
+
+        if len(start) >= 3:
+            canvas_angle_rad = start[2]
+            if not self.use_global:
+                canvas_angle_rad += np.pi / 2
+
+            vx, vy = _get_vehicle_poly(sx, sy, canvas_angle_rad)
+            self._start_item.setData(vx, vy)
+        else:
+            self._start_item.setData([sx], [sy])
 
         if len(goal) >= 2:
             gx, gy = self._to_canvas(goal[0], goal[1])

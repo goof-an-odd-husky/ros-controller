@@ -17,11 +17,7 @@ from pyqtgraph.Qt import QtCore
 from numpy.typing import NDArray
 
 from goof_an_odd_husky.trajectory_planner import TrajectoryPlanner
-from goof_an_odd_husky.obstacles import (
-    ObstaclePipeline,
-    CircleObstacle,
-    LineObstacle,
-)
+from goof_an_odd_husky.obstacles import ObstaclePipeline
 from goof_an_odd_husky.helpers import gps_to_vector
 from goof_an_odd_husky.teb_planner import TEBPlanner
 from goof_an_odd_husky.trajectory_visualizer import TrajectoryVisualizer
@@ -123,6 +119,7 @@ class ControllerNode(Node):
             y_lim=(-4, 16),
             path_render_mode="both",
             interactive_obstacles=False,
+            use_gps=use_gps,
             on_goal_set=self.set_new_goal,
         )
 
@@ -266,6 +263,7 @@ class ControllerNode(Node):
             return
 
         self.goal_reached = False
+
         self.planner.refine(
             current_velocity=current_velocity, current_omega=current_omega
         )
@@ -273,6 +271,41 @@ class ControllerNode(Node):
         performance["Planner refinement"] = round((t4 - t3) * 1000, 2)
 
         trajectory = self.planner.get_trajectory()
+
+        with self.data_lock:
+            latest_odom_after = self.latest_odom
+
+        if (
+            latest_odom_after is not None
+            and trajectory is not None
+            and len(trajectory) > 0
+        ):
+            x1, y1 = odom_g.pose.pose.position.x, odom_g.pose.pose.position.y
+            yaw1 = yaw
+
+            x2 = latest_odom_after.pose.pose.position.x
+            y2 = latest_odom_after.pose.pose.position.y
+            orient2 = latest_odom_after.pose.pose.orientation
+            yaw2 = Rotation.from_quat(
+                [orient2.x, orient2.y, orient2.z, orient2.w]
+            ).as_euler("zyx")[0]
+
+            if x1 != x2 or y1 != y2 or yaw1 != yaw2:
+                c1, s1 = np.cos(yaw1), np.sin(yaw1)
+                traj_xg = x1 + trajectory[:, 0] * c1 - trajectory[:, 1] * s1
+                traj_yg = y1 + trajectory[:, 0] * s1 + trajectory[:, 1] * c1
+                traj_thetag = trajectory[:, 2] + yaw1
+
+                c2, s2 = np.cos(yaw2), np.sin(yaw2)
+                dx, dy = traj_xg - x2, traj_yg - y2
+
+                trajectory[:, 0] = dx * c2 + dy * s2
+                trajectory[:, 1] = -dx * s2 + dy * c2
+                trajectory[:, 2] = traj_thetag - yaw2
+
+                with self.viz_lock:
+                    self.current_robot_pose_global = [x2, y2, yaw2]
+
         v, omega = trajectory_to_action(trajectory)
         self._publish_velocity(v, omega)
 
@@ -347,62 +380,22 @@ class ControllerNode(Node):
     def render_loop(self) -> None:
         if not self.visualizer.is_open:
             return
+
         with self.viz_lock:
-            trajectory, obstacles, start_goal = (
-                self.pending_trajectory,
-                self.pending_obstacles,
-                self.pending_start_goal,
-            )
-            rx, ry, rtheta = self.current_robot_pose_global
+            trajectory = self.pending_trajectory
+            obstacles = self.pending_obstacles
+            start_goal = self.pending_start_goal
+            robot_pose = self.current_robot_pose_global
+
         if trajectory is None and obstacles is None and start_goal is None:
             return
-        if self.visualizer.use_global:
-            c, s = np.cos(rtheta), np.sin(rtheta)
-            if trajectory is not None and len(trajectory) > 0:
-                gtraj = trajectory.copy()
-                gtraj[:, 0], gtraj[:, 1] = (
-                    rx + trajectory[:, 0] * c - trajectory[:, 1] * s,
-                    ry + trajectory[:, 0] * s + trajectory[:, 1] * c,
-                )
-                gtraj[:, 2] = trajectory[:, 2] + rtheta
-                trajectory = gtraj
-            if obstacles is not None:
-                graphical_obs = []
-                for o in obstacles:
-                    if isinstance(o, CircleObstacle):
-                        graphical_obs.append(
-                            CircleObstacle(
-                                rx + o.x * c - o.y * s, ry + o.x * s + o.y * c, o.radius
-                            )
-                        )
-                    elif isinstance(o, LineObstacle):
-                        graphical_obs.append(
-                            LineObstacle(
-                                rx + o.x1 * c - o.y1 * s,
-                                ry + o.x1 * s + o.y1 * c,
-                                rx + o.x2 * c - o.y2 * s,
-                                ry + o.x2 * s + o.y2 * c,
-                            )
-                        )
-                obstacles = graphical_obs
-            if start_goal is not None:
-                st, gl = start_goal
-                gsx, gsy = rx + st[0] * c - st[1] * s, ry + st[0] * s + st[1] * c
 
-                if len(gl) >= 3:
-                    ggx, ggy = rx + gl[0] * c - gl[1] * s, ry + gl[0] * s + gl[1] * c
-                    start_goal = (
-                        [gsx, gsy, st[2] + rtheta],
-                        [ggx, ggy, gl[2] + rtheta],
-                    )
-                else:
-                    start_goal = ([gsx, gsy, st[2] + rtheta], [])
-        if start_goal:
-            self.visualizer.set_start_goal(*start_goal)
-        if obstacles:
-            self.visualizer.set_obstacles(obstacles)
-        if trajectory is not None:
-            self.visualizer.update_trajectory(trajectory)
+        self.visualizer.update_world_state(
+            robot_pose=robot_pose,
+            trajectory=trajectory,
+            obstacles=obstacles,
+            start_goal=start_goal,
+        )
         self.visualizer.draw()
 
 

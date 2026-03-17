@@ -1,4 +1,4 @@
-from goof_an_odd_husky.trajectory_planner import Obstacle, CircleObstacle, LineObstacle
+from goof_an_odd_husky.obstacles import Obstacle, CircleObstacle, LineObstacle
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtWidgets, QtCore

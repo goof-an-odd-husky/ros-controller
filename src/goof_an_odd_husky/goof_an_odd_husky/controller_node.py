@@ -1,14 +1,9 @@
 import json
 import time
-from goof_an_odd_husky.trajectory_planner import (
-    TrajectoryPlanner,
-    ObstaclePipeline,
-    CircleObstacle,
-    LineObstacle,
-)
-from numpy.typing import NDArray
-from typing import Annotated
-from goof_an_odd_husky.helpers import gps_to_vector, normalize_angle
+import numpy as np
+from scipy.spatial.transform import Rotation
+import threading
+
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
@@ -16,15 +11,23 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from sensor_msgs.msg import LaserScan, NavSatFix
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TwistStamped
-import numpy as np
-from scipy.spatial.transform import Rotation
-import threading
 
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore
+from numpy.typing import NDArray
 
+from goof_an_odd_husky.trajectory_planner import TrajectoryPlanner
+from goof_an_odd_husky.obstacles import (
+    ObstaclePipeline,
+    CircleObstacle,
+    LineObstacle,
+)
+from goof_an_odd_husky.helpers import gps_to_vector
 from goof_an_odd_husky.teb_planner import TEBPlanner
 from goof_an_odd_husky.trajectory_visualizer import TrajectoryVisualizer
+
+from goof_an_odd_husky.kinematics import get_odom_delta
+from goof_an_odd_husky.trajectory_tracker import trajectory_to_action
 
 
 class ControllerNode(Node):
@@ -172,46 +175,6 @@ class ControllerNode(Node):
         with self.data_lock:
             self.latest_odom = msg
 
-    def get_odom_delta(
-        self, curr: Odometry, prev: Odometry | None
-    ) -> tuple[float, float, float]:
-        if prev is None:
-            return 0.0, 0.0, 0.0
-        curr_pos, prev_pos = curr.pose.pose.position, prev.pose.pose.position
-        curr_q, prev_q = curr.pose.pose.orientation, prev.pose.pose.orientation
-        curr_yaw = Rotation.from_quat(
-            [curr_q.x, curr_q.y, curr_q.z, curr_q.w]
-        ).as_euler("zyx")[0]
-        prev_yaw = Rotation.from_quat(
-            [prev_q.x, prev_q.y, prev_q.z, prev_q.w]
-        ).as_euler("zyx")[0]
-        dx_global, dy_global = curr_pos.x - prev_pos.x, curr_pos.y - prev_pos.y
-        dtheta = normalize_angle(curr_yaw - prev_yaw)
-        cos_p, sin_p = np.cos(prev_yaw), np.sin(prev_yaw)
-        dx_local = dx_global * cos_p + dy_global * sin_p
-        dy_local = -dx_global * sin_p + dy_global * cos_p
-        return dx_local, dy_local, dtheta
-
-    def trajectory_to_action(
-        self, trajectory: Annotated[NDArray[np.float64], (None, 4)]
-    ) -> tuple[float, float]:
-        if trajectory is None or len(trajectory) < 2:
-            return 0.0, 0.0
-        x1, y1, th1, dt = trajectory[0]
-        x2, y2, th2, _ = trajectory[1]
-        if dt < 1e-3:
-            return 0.0, 0.0
-        dx, dy = x2 - x1, y2 - y1
-        direction = 1.0 if (dx * np.cos(th1) + dy * np.sin(th1)) >= 0 else -1.0
-        chord = np.hypot(dx, dy)
-        arc_angle = normalize_angle(th2 - th1)
-        arc_len = (
-            chord
-            if abs(arc_angle) < 1e-5
-            else (chord / (2 * np.sin(arc_angle / 2))) * arc_angle
-        )
-        return (direction * abs(arc_len) / dt), (arc_angle / dt)
-
     def control_loop(self) -> None:
         start_time = time.perf_counter()
         performance = {}
@@ -310,7 +273,7 @@ class ControllerNode(Node):
         performance["Planner refinement"] = round((t4 - t3) * 1000, 2)
 
         trajectory = self.planner.get_trajectory()
-        v, omega = self.trajectory_to_action(trajectory)
+        v, omega = trajectory_to_action(trajectory)
         self._publish_velocity(v, omega)
 
         t5 = time.perf_counter()
@@ -328,7 +291,7 @@ class ControllerNode(Node):
             )
 
     def _update_odometry(self, odom_g) -> None:
-        dx, dy, dt = self.get_odom_delta(odom_g, self.last_processed_odom)
+        dx, dy, dt = get_odom_delta(odom_g, self.last_processed_odom)
         if self.last_processed_odom is not None:
             self.planner.transform_trajectory(dx, dy, dt)
         self.last_processed_odom = odom_g

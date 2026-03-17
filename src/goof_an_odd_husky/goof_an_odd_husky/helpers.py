@@ -35,3 +35,26 @@ def gps_to_vector(
     x = R * delta_lon * math.cos(lat1_rad)
 
     return x, y
+
+
+def point_segment_distance(Px, Py, S1x, S1y, S2x, S2y):
+    """Vectorized point-to-segment distance."""
+    S1S2_x = S2x - S1x
+    S1S2_y = S2y - S1y
+    S1P_x = Px - S1x
+    S1P_y = Py - S1y
+
+    len_sq = S1S2_x**2 + S1S2_y**2
+    len_sq = np.maximum(len_sq, 1e-10)
+
+    t = (S1P_x * S1S2_x + S1P_y * S1S2_y) / len_sq
+    t = np.clip(t, 0.0, 1.0)
+
+    Proj_x = S1x + t * S1S2_x
+    Proj_y = S1y + t * S1S2_y
+
+    u_x = Px - Proj_x
+    u_y = Py - Proj_y
+
+    d = np.sqrt(u_x**2 + u_y**2 + 1e-10)
+    return d, u_x, u_y, t

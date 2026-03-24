@@ -1,4 +1,4 @@
-from goof_an_odd_husky.obstacles import Obstacle
+from goof_an_odd_husky_common.obstacles import Obstacle
 from abc import ABC, abstractmethod
 import numpy as np
 from numpy.typing import NDArray

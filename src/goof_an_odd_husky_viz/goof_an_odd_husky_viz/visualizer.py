@@ -1,4 +1,8 @@
-from goof_an_odd_husky.obstacles import Obstacle, CircleObstacle, LineObstacle
+from goof_an_odd_husky_common.obstacles import (
+    Obstacle,
+    CircleObstacle,
+    LineObstacle,
+)
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtWidgets, QtCore
@@ -123,6 +127,7 @@ class TrajectoryVisualizer:
     _arrows_item: pg.PlotDataItem
     _current_obstacles: list[Obstacle]
     on_goal_set: Callable[[float, float], None] | None
+    on_cancel: Callable[[], None] | None
     _coord_input: QtWidgets.QLineEdit
 
     def __init__(
@@ -135,6 +140,7 @@ class TrajectoryVisualizer:
         use_global: bool = False,
         use_gps: bool = True,
         on_goal_set: Callable[[float, float], None] | None = None,
+        on_cancel: Callable[[], None] | None = None,
     ) -> None:
         self._is_open = True
         self.interactive_obstacles = interactive_obstacles
@@ -146,6 +152,7 @@ class TrajectoryVisualizer:
         self.use_global = use_global
         self.use_gps = use_gps
         self.on_goal_set = on_goal_set
+        self.on_cancel = on_cancel
 
         self._robot_pose = (0.0, 0.0, 0.0)
         self._raw_trajectory = None
@@ -183,11 +190,14 @@ class TrajectoryVisualizer:
 
         set_goal_btn = QtWidgets.QPushButton("Set Goal")
         set_goal_btn.clicked.connect(self._on_set_goal_clicked)
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        cancel_btn.clicked.connect(self._on_cancel_clicked)
 
         input_layout.addWidget(coord_label)
         input_layout.addWidget(self._coord_input)
         input_layout.addWidget(set_goal_btn)
         input_layout.addStretch()
+        input_layout.addWidget(cancel_btn)
 
         layout.addWidget(input_panel)
 
@@ -272,6 +282,10 @@ class TrajectoryVisualizer:
                 self.on_goal_set(val1, val2)
         except ValueError:
             print("Invalid coordinates. Use numeric values.")
+
+    def _on_cancel_clicked(self) -> None:
+        if self.on_cancel:
+            self.on_cancel()
 
     def _on_key_pressed(self, event) -> None:
         if event.key() == QtCore.Qt.Key.Key_G:

@@ -1,5 +1,5 @@
 from goof_an_odd_husky.helpers import normalize_angle, point_segment_distance
-from goof_an_odd_husky.obstacles import (
+from goof_an_odd_husky_common.obstacles import (
     CircleObstacle,
     LineObstacle,
 )

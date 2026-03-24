@@ -1,0 +1,12 @@
+folium:
+  ubuntu:
+    pip:
+      packages: [folium]
+osmnx:
+  ubuntu:
+    pip:
+      packages: [osmnx]
+pyceres:
+  ubuntu:
+    pip:
+      packages: [pyceres]

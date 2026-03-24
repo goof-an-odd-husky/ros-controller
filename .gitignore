@@ -1,9 +1,11 @@
 *.sdf
+*.html
 
 .history/*
 
 build/
 install/
+cache/
 log/
 ros2_ws
 

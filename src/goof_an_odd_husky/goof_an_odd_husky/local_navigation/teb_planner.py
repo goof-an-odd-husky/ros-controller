@@ -1,4 +1,4 @@
-from goof_an_odd_husky.teb_costs import (
+from goof_an_odd_husky.local_navigation.teb_costs import (
     SegmentVelocityCost,
     SegmentAngularVelocityCost,
     SegmentAccelerationCost,
@@ -14,12 +14,12 @@ from goof_an_odd_husky.teb_costs import (
 )
 from goof_an_odd_husky.helpers import normalize_angle
 from typing import override
-from goof_an_odd_husky.trajectory_planner import TrajectoryPlanner
-from goof_an_odd_husky.obstacles import (
+from goof_an_odd_husky.local_navigation.trajectory_planner import TrajectoryPlanner
+from goof_an_odd_husky_common.obstacles import (
     CircleObstacle,
     LineObstacle,
-    ObstacleFilter,
 )
+from goof_an_odd_husky.local_navigation.obstacle_pipeline import ObstacleFilter
 import numpy as np
 from numpy.typing import NDArray
 import pyceres

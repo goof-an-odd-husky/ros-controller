@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 source /workspace/husky-sim/ros2_ws/install/setup.bash
 
 mkdir -p ros2_ws/src
@@ -13,3 +15,6 @@ grep -qxF 'source /workspace/husky-sim/ros2_ws/install/setup.bash' ~/.bashrc || 
     echo 'source /workspace/husky-sim/ros2_ws/install/setup.bash' >> ~/.bashrc
 grep -qxF 'source /workspace/goof-an-odd-husky/ros2_ws/install/setup.bash' ~/.bashrc || \
     echo 'source /workspace/goof-an-odd-husky/ros2_ws/install/setup.bash' >> ~/.bashrc
+
+echo "yaml file://$(pwd)/rosdep_custom.yaml" | sudo tee /etc/ros/rosdep/sources.list.d/99-custom.list
+rosdep update

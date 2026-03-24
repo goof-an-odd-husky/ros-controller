@@ -13,6 +13,7 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
         line_obstacles: list[LineObstacle],
         weight: float,
         safety_radius: float,
+        softmin_alpha: float = -7.0,
     ):
         super().__init__()
 
@@ -24,6 +25,7 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
         self.n_obstacles = len(self.C_x)
         self.weight = weight
         self.safety_radius = safety_radius
+        self.softmin_alpha = softmin_alpha
 
         self.set_num_residuals(self.n_obstacles)
         self.set_parameter_block_sizes([2, 2])
@@ -35,22 +37,28 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
         d1, u1_x, u1_y, _ = point_segment_distance(
             A_x, A_y, self.C_x, self.C_y, self.D_x, self.D_y
         )
-
         d2, u2_x, u2_y, _ = point_segment_distance(
             B_x, B_y, self.C_x, self.C_y, self.D_x, self.D_y
         )
-
         d3, u3_x, u3_y, t3 = point_segment_distance(
             self.C_x, self.C_y, A_x, A_y, B_x, B_y
         )
-
         d4, u4_x, u4_y, t4 = point_segment_distance(
             self.D_x, self.D_y, A_x, A_y, B_x, B_y
         )
 
         all_d = np.vstack([d1, d2, d3, d4])
-        min_idx = np.argmin(all_d, axis=0)
-        d_min = all_d[min_idx, np.arange(self.n_obstacles)]
+
+        scaled_d = self.softmin_alpha * all_d
+        max_scaled_d = np.max(scaled_d, axis=0)
+
+        exp_d = np.exp(scaled_d - max_scaled_d)
+        sum_exp = np.sum(exp_d, axis=0)
+
+        d_min = (np.log(sum_exp) + max_scaled_d) / self.softmin_alpha
+
+        weights = exp_d / sum_exp
+        w1, w2, w3, w4 = weights[0], weights[1], weights[2], weights[3]
 
         CD_x, CD_y = self.D_x - self.C_x, self.D_y - self.C_y
         CA_x, CA_y = A_x - self.C_x, A_y - self.C_y
@@ -77,10 +85,10 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
         residuals[:] = np.where(active_mask, self.weight * errors, 0.0)
 
         if jacobians is not None:
-            inv_d1 = 1.0 / d1
-            inv_d2 = 1.0 / d2
-            inv_d3 = 1.0 / d3
-            inv_d4 = 1.0 / d4
+            inv_d1 = 1.0 / np.maximum(d1, 1e-8)
+            inv_d2 = 1.0 / np.maximum(d2, 1e-8)
+            inv_d3 = 1.0 / np.maximum(d3, 1e-8)
+            inv_d4 = 1.0 / np.maximum(d4, 1e-8)
 
             z = np.zeros(self.n_obstacles)
 
@@ -96,10 +104,11 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
             gA4_x, gA4_y = -(1.0 - t4) * u4_x * inv_d4, -(1.0 - t4) * u4_y * inv_d4
             gB4_x, gB4_y = -t4 * u4_x * inv_d4, -t4 * u4_y * inv_d4
 
-            gA_x_min = np.choose(min_idx, [gA1_x, gA2_x, gA3_x, gA4_x])
-            gA_y_min = np.choose(min_idx, [gA1_y, gA2_y, gA3_y, gA4_y])
-            gB_x_min = np.choose(min_idx, [gB1_x, gB2_x, gB3_x, gB4_x])
-            gB_y_min = np.choose(min_idx, [gB1_y, gB2_y, gB3_y, gB4_y])
+            gA_x_min = w1 * gA1_x + w2 * gA2_x + w3 * gA3_x + w4 * gA4_x
+            gA_y_min = w1 * gA1_y + w2 * gA2_y + w3 * gA3_y + w4 * gA4_y
+
+            gB_x_min = w1 * gB1_x + w2 * gB2_x + w3 * gB3_x + w4 * gB4_x
+            gB_y_min = w1 * gB1_y + w2 * gB2_y + w3 * gB3_y + w4 * gB4_y
 
             j_scaler = np.where(active_mask, self.weight * (-sign_mask), 0.0)
 

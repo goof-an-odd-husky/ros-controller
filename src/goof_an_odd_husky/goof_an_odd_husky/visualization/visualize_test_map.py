@@ -1,3 +1,4 @@
+from goof_an_odd_husky.config import OSM_RELATION_ID
 from goof_an_odd_husky.global_navigation.graph import (
     load_graph_for_relation,
     filter_walkable_paved,
@@ -8,8 +9,6 @@ from goof_an_odd_husky.global_navigation.routing import (
 )
 from goof_an_odd_husky.visualization.map_visualizer import build_folium_map
 
-STRYJSKYJ_PARK_RELATION_ID = 5423208
-
 ORIGIN_NODE = 1707348491
 DESTINATION_NODE = 7600216860
 
@@ -19,7 +18,7 @@ DEST_COORD = (49.82118, 24.02240)
 
 def main():
     print("Fetching and filtering graph...")
-    G_raw = load_graph_for_relation(STRYJSKYJ_PARK_RELATION_ID)
+    G_raw = load_graph_for_relation(OSM_RELATION_ID)
     G = filter_walkable_paved(G_raw)
     print(f"Graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
 

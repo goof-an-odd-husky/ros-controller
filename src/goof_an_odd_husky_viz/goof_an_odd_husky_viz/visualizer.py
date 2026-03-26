@@ -121,6 +121,8 @@ class TrajectoryVisualizer:
     _plot: pg.PlotWidget
     _traj_item: pg.PlotDataItem
     _traj_straight_item: pg.PlotDataItem | None
+    _global_path_item: pg.PlotDataItem
+    _raw_global_path: NDArray[np.float64] | None
     _start_item: pg.PlotDataItem
     _goal_item: pg.ScatterPlotItem
     _obstacle_item: pg.PlotDataItem
@@ -209,7 +211,15 @@ class TrajectoryVisualizer:
         self._plot.setAspectLocked(True)
         self._plot.showGrid(x=True, y=True, alpha=0.3)
 
-        blue_pen = pg.mkPen("b", width=1.5)
+        self._raw_global_path = None
+
+        green_dashed = pg.mkPen(
+            color=(34, 139, 34), width=2, style=QtCore.Qt.PenStyle.DashLine
+        )
+        self._global_path_item = self._plot.plot([], [], pen=green_dashed)
+        self._global_path_item.setZValue(1)
+
+        blue_pen = pg.mkPen("b", width=2)
         blue_dashed = pg.mkPen("b", width=1, style=QtCore.Qt.PenStyle.DashLine)
 
         if path_render_mode == PathRenderMode.STRAIGHT:
@@ -311,12 +321,14 @@ class TrajectoryVisualizer:
         self,
         robot_pose: tuple[float, float, float] | list[float],
         trajectory: NDArray[np.floating] | None,
+        global_path: NDArray[np.floating] | None,
         obstacles: list[Obstacle] | None,
         start_goal: tuple[list[float], list[float]] | None,
     ) -> None:
         """Stores the raw local state and triggers a full visual update."""
         self._robot_pose = robot_pose
         self._raw_trajectory = trajectory
+        self._raw_global_path = global_path
         self._raw_obstacles = obstacles
         self._raw_start_goal = start_goal
 
@@ -326,6 +338,19 @@ class TrajectoryVisualizer:
         """Applies coordinate transformations based on the current view mode."""
         rx, ry, rtheta = self._robot_pose
         c, s = np.cos(rtheta), np.sin(rtheta)
+
+        if self._raw_global_path is not None and len(self._raw_global_path) > 0:
+            if self.use_global:
+                self.update_global_path(self._raw_global_path)
+            else:
+                dx = self._raw_global_path[:, 0] - rx
+                dy = self._raw_global_path[:, 1] - ry
+                local_path = np.zeros_like(self._raw_global_path)
+                local_path[:, 0] = dx * c + dy * s
+                local_path[:, 1] = -dx * s + dy * c
+                self.update_global_path(local_path)
+        else:
+            self.update_global_path(None)
 
         if self._raw_trajectory is not None and len(self._raw_trajectory) > 0:
             if self.use_global:
@@ -435,6 +460,17 @@ class TrajectoryVisualizer:
 
         arrow_xs, arrow_ys = _build_arrow_segments(transformed)
         self._arrows_item.setData(arrow_xs, arrow_ys)
+
+    def update_global_path(self, points: NDArray[np.floating] | None) -> None:
+        if points is None or len(points) == 0:
+            self._global_path_item.setData([], [])
+            return
+
+        transformed = points.copy()
+        if not self.use_global:
+            transformed[:, 0], transformed[:, 1] = -points[:, 1], points[:, 0]
+
+        self._global_path_item.setData(transformed[:, 0], transformed[:, 1])
 
     def get_obstacles(self) -> list[Obstacle]:
         return list(self.obstacles)

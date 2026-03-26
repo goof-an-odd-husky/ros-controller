@@ -14,3 +14,8 @@ else:
         "gps": "/todo",
         "odom": "/odometry/filtered",
     }
+
+OSM_RELATION_ID = 5423208
+
+MAX_PATH_EDGE = 5
+MAX_TRAJECTORY_DISTANCE = 13

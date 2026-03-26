@@ -3,6 +3,11 @@ import networkx as nx
 import osmnx as ox
 
 from goof_an_odd_husky.global_navigation.graph import coerce_str
+from goof_an_odd_husky.global_navigation.routing import (
+    all_edges_coords,
+    stitch_path_coords,
+    slice_path,
+)
 
 _COPY_TOAST_JS = """
 <style>
@@ -42,14 +47,7 @@ def _compute_center(nodes_with_data) -> tuple[float, float]:
 
 
 def _draw_graph_edges(folium_map: folium.Map, G: nx.MultiDiGraph) -> None:
-    for u, v, data in G.edges(data=True):
-        u_data, v_data = G.nodes[u], G.nodes[v]
-
-        if "geometry" in data:
-            coords = [(lat, lon) for lon, lat in data["geometry"].coords]
-        else:
-            coords = [(u_data["y"], u_data["x"]), (v_data["y"], v_data["x"])]
-
+    for (u, v, data), coords in zip(G.edges(data=True), all_edges_coords(G)):
         highway = coerce_str(data.get("highway", "unknown"))
         surface = coerce_str(data.get("surface", "unknown"))
         length = data.get("length", 0)
@@ -66,30 +64,31 @@ def _draw_graph_edges(folium_map: folium.Map, G: nx.MultiDiGraph) -> None:
 def _draw_path(
     folium_map: folium.Map, path: list[int], path_graph: nx.MultiDiGraph
 ) -> None:
-    path_coords = []
-    total_length = 0.0
+    total_length = sum(
+        path_graph.edges[path[i], path[i + 1], 0].get("length", 0)
+        for i in range(len(path) - 1)
+    )
 
-    for i in range(len(path) - 1):
-        u, v = path[i], path[i + 1]
-        edge_data = path_graph.edges[u, v, 0]
-        total_length += edge_data.get("length", 0)
-
-        if "geometry" in edge_data:
-            segment = [(lat, lon) for lon, lat in edge_data["geometry"].coords]
-        else:
-            segment = [
-                (path_graph.nodes[u]["y"], path_graph.nodes[u]["x"]),
-                (path_graph.nodes[v]["y"], path_graph.nodes[v]["x"]),
-            ]
-        path_coords.extend(segment[1:] if path_coords else segment)
+    coords = slice_path(stitch_path_coords(path_graph, path))
 
     folium.PolyLine(
-        locations=path_coords,
+        locations=coords,
         weight=6,
         color="#ff6600",
         opacity=0.95,
         tooltip=f"A* path | {len(path)} nodes | {total_length:.1f}m total",
     ).add_to(folium_map)
+
+    for coord in coords:
+        folium.CircleMarker(
+            location=coord,
+            radius=3,
+            color="#ff6600",
+            fill=True,
+            fill_color="#ffeedd",
+            fill_opacity=1.0,
+            weight=2,
+        ).add_to(folium_map)
 
 
 def _draw_nodes(

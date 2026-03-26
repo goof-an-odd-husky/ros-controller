@@ -14,7 +14,7 @@ class ObstacleExtractor(ABC):
 
 
 class CircleExtractor(ObstacleExtractor):
-    def __init__(self, min_radius: float = 0.1, bias_factor: float = 0.2):
+    def __init__(self, min_radius: float = 0.5, bias_factor: float = 0.4):
         self.min_radius = min_radius
         self.bias_factor = bias_factor
 

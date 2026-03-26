@@ -31,6 +31,7 @@ class VisualizerNode(Node):
     data_lock: threading.Lock
     pending_robot_pose: list[float] | None
     pending_trajectory: NDArray[np.float64] | None
+    pending_global_path: NDArray[np.float64] | None
     pending_obstacles: list | None
     pending_goal_local: list[float] | None
     visualizer: TrajectoryVisualizer
@@ -43,6 +44,7 @@ class VisualizerNode(Node):
 
         self.pending_robot_pose = None
         self.pending_trajectory = None
+        self.pending_global_path = None
         self.pending_obstacles = None
         self.pending_goal_local = None
 
@@ -60,6 +62,13 @@ class VisualizerNode(Node):
             "/viz/trajectory",
             self._on_trajectory,
             10,
+            callback_group=incoming_cb_group,
+        )
+        self.global_path_sub = self.create_subscription(
+            Path,
+            "/viz/global_path",
+            self._on_global_path,
+            LATCHED_QOS,
             callback_group=incoming_cb_group,
         )
         self.obstacles_sub = self.create_subscription(
@@ -149,6 +158,11 @@ class VisualizerNode(Node):
         with self.data_lock:
             self.pending_trajectory = traj
 
+    def _on_global_path(self, msg: Path) -> None:
+        path = np.array([[p.pose.position.x, p.pose.position.y] for p in msg.poses])
+        with self.data_lock:
+            self.pending_global_path = path
+
     def _on_obstacles(self, msg: ObstacleArray) -> None:
         with self.data_lock:
             self.pending_obstacles = msg_to_obstacles(msg)
@@ -167,15 +181,20 @@ class VisualizerNode(Node):
         with self.data_lock:
             robot_pose = self.pending_robot_pose
             trajectory = self.pending_trajectory
+            global_path = self.pending_global_path
             obstacles = self.pending_obstacles
             goal_local = self.pending_goal_local
 
-        if all(v is None for v in [robot_pose, trajectory, obstacles, goal_local]):
+        if all(
+            v is None
+            for v in [robot_pose, trajectory, obstacles, goal_local, global_path]
+        ):
             return
 
         self.visualizer.update_world_state(
             robot_pose=robot_pose or [0.0, 0.0, 0.0],
             trajectory=trajectory,
+            global_path=global_path,
             obstacles=obstacles,
             start_goal=([0.0, 0.0, 0.0], goal_local)
             if goal_local is not None
@@ -186,7 +205,7 @@ class VisualizerNode(Node):
 
 def main(args=None) -> None:
     rclpy.init(args=args)
-    node = VisualizerNode(use_gps=False)
+    node = VisualizerNode(use_gps=True)
 
     executor = MultiThreadedExecutor(num_threads=2)
     executor.add_node(node)

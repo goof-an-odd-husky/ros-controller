@@ -37,6 +37,26 @@ def gps_to_vector(
     return x, y
 
 
+def coords_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Finds a distance between two GPS coordinates in meters.
+
+    Args:
+        lat1, lon1: Origin point latitude and longitude (decimal degrees)
+        lat2, lon2: Target point latitude and longitude (decimal degrees)
+
+    Returns:
+        fload: distance
+    """
+    return math.hypot(
+        *gps_to_vector(
+            lat1,
+            lon1,
+            lat2,
+            lon2,
+        )
+    )
+
+
 def point_segment_distance(Px, Py, S1x, S1y, S2x, S2y):
     """Vectorized point-to-segment distance."""
     S1S2_x = S2x - S1x

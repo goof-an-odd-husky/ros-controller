@@ -4,17 +4,44 @@ import numpy as np
 from numpy.typing import NDArray
 from sensor_msgs.msg import LaserScan
 
-from goof_an_odd_husky.helpers import point_segment_distance
+from goof_an_odd_husky_common.helpers import point_segment_distance, segments_intersect
 from goof_an_odd_husky_common.obstacles import Obstacle, CircleObstacle, LineObstacle
 
 
 class ObstacleExtractor(ABC):
+    """Abstract base class for extracting geometric objects from point clusters."""
+
     @abstractmethod
-    def extract(self, clusters: list[NDArray[np.floating]]) -> list[Obstacle]: ...
+    def extract(self, clusters: list[NDArray[np.floating]]) -> list[Obstacle]:
+        """Extract obstacles from a list of point clusters.
+
+        Args:
+            clusters: A list of numpy arrays representing clustered point clouds.
+
+        Returns:
+            list[Obstacle]: Extracted geometry obstacles.
+        """
+        ...
 
 
 class CircleExtractor(ObstacleExtractor):
+    """Fits circle primitives to point clusters.
+
+    Attributes:
+        min_radius: The minimum acceptable radius for a circular obstacle.
+        bias_factor: Multiplier to push the obstacle center deeper away from the sensor.
+    """
+
+    min_radius: float
+    bias_factor: float
+
     def __init__(self, min_radius: float = 0.5, bias_factor: float = 0.4):
+        """Initializes the CircleExtractor.
+
+        Args:
+            min_radius: Minimum radius of the fitted circles.
+            bias_factor: Center bias multiplier.
+        """
         self.min_radius = min_radius
         self.bias_factor = bias_factor
 
@@ -50,7 +77,20 @@ class CircleExtractor(ObstacleExtractor):
 
 
 class LineExtractor(ObstacleExtractor):
+    """Fits line primitives to point clusters recursively.
+
+    Attributes:
+        max_distance: Max deviation distance to accept a point as belonging to a line segment.
+    """
+
+    max_distance: float
+
     def __init__(self, max_distance: float = 0.5):
+        """Initializes the LineExtractor.
+
+        Args:
+            max_distance: Tolerance distance from the mathematical line.
+        """
         self.max_distance = max_distance
 
     def extract(self, clusters: list[NDArray[np.floating]]) -> list[Obstacle]:
@@ -86,12 +126,35 @@ class LineExtractor(ObstacleExtractor):
 
 
 class ObstaclePipeline:
+    """End-to-end pipeline processing raw LaserScans into geometric primitives.
+
+    Attributes:
+        cluster_break_distance: Gap threshold in meters to slice scans into clusters.
+        geometry_split_threshold: Threshold to decide whether to map a cluster as a Line or Circle.
+        step: Ray skipping frequency to optimize computational overhead.
+        circle_extractor: Instance of CircleExtractor.
+        line_extractor: Instance of LineExtractor.
+    """
+
+    cluster_break_distance: float
+    geometry_split_threshold: float
+    step: int
+    circle_extractor: CircleExtractor
+    line_extractor: LineExtractor
+
     def __init__(
         self,
         cluster_break_distance: float = 1.5,
         geometry_split_threshold: float = 1.5,
         step: int = 1,
     ):
+        """Initialize pipeline parameters.
+
+        Args:
+            cluster_break_distance: Points farther apart than this start a new cluster.
+            geometry_split_threshold: Clusters larger than this are fitted as lines.
+            step: Lidar downsampling rate.
+        """
         self.cluster_break_distance = cluster_break_distance
         self.geometry_split_threshold = geometry_split_threshold
         self.step = step
@@ -99,6 +162,14 @@ class ObstaclePipeline:
         self.line_extractor = LineExtractor()
 
     def process(self, scan_msg: LaserScan) -> list[Obstacle]:
+        """Convert a raw LaserScan message into a list of geometric obstacles.
+
+        Args:
+            scan_msg: Incoming LaserScan.
+
+        Returns:
+            list[Obstacle]: A collection of extracted Obstacle objects.
+        """
         points = self._scan_to_cartesian(scan_msg)
         if len(points) == 0:
             return []
@@ -154,12 +225,42 @@ class ObstaclePipeline:
 
 
 class ObstacleFilter:
+    """Pre-filters geometric obstacles to supply only relevant ones to the TEB optimization step.
+
+    Attributes:
+        safety_radius: Dist margin applied to obstacle checks.
+        circle_obstacles: All known circles.
+        line_obstacles: All known lines.
+        circ_x, circ_y, circ_r: Numpy arrays representing circle parameters.
+        line_cx, line_cy, line_dx, line_dy: Numpy arrays representing line segment parameters.
+    """
+
+    safety_radius: float
+    circle_obstacles: list[CircleObstacle]
+    line_obstacles: list[LineObstacle]
+
+    circ_x: NDArray[np.float64]
+    circ_y: NDArray[np.float64]
+    circ_r: NDArray[np.float64]
+
+    line_cx: NDArray[np.float64]
+    line_cy: NDArray[np.float64]
+    line_dx: NDArray[np.float64]
+    line_dy: NDArray[np.float64]
+
     def __init__(
         self,
         circle_obstacles: list[CircleObstacle],
         line_obstacles: list[LineObstacle],
         safety_radius: float,
     ):
+        """Initializes the filter with precomputed numpy vectors for fast distance checking.
+
+        Args:
+            circle_obstacles: The full list of circular obstacles.
+            line_obstacles: The full list of line segment obstacles.
+            safety_radius: Safety padding radius.
+        """
         self.safety_radius = safety_radius
         self.circle_obstacles = circle_obstacles
         self.line_obstacles = line_obstacles
@@ -180,6 +281,15 @@ class ObstacleFilter:
     def get_close_circles(
         self, A_x: float, A_y: float, B_x: float, B_y: float
     ) -> list[CircleObstacle]:
+        """Filters circular obstacles intersecting a segment or positioned near it.
+
+        Args:
+            A_x, A_y: Start point of segment.
+            B_x, B_y: End point of segment.
+
+        Returns:
+            list[CircleObstacle]: Filtered subset of close circles.
+        """
         if not self.circle_obstacles:
             return []
 
@@ -197,6 +307,15 @@ class ObstacleFilter:
     def get_close_lines(
         self, A_x: float, A_y: float, B_x: float, B_y: float
     ) -> list[LineObstacle]:
+        """Filters line obstacles intersecting a segment or positioned near it.
+
+        Args:
+            A_x, A_y: Start point of segment.
+            B_x, B_y: End point of segment.
+
+        Returns:
+            list[LineObstacle]: Filtered subset of close lines.
+        """
         if not self.line_obstacles:
             return []
 
@@ -210,17 +329,9 @@ class ObstacleFilter:
         d4, *_ = point_segment_distance(self.line_dx, self.line_dy, A_x, A_y, B_x, B_y)
 
         min_dist = np.min(np.vstack([d1, d2, d3, d4]), axis=0)
-
-        CD_x, CD_y = self.line_dx - self.line_cx, self.line_dy - self.line_cy
-        cp1 = CD_x * (A_y - self.line_cy) - CD_y * (A_x - self.line_cx)
-        cp2 = CD_x * (B_y - self.line_cy) - CD_y * (B_x - self.line_cx)
-        diff_side_CD = (cp1 * cp2) <= 0.0
-
-        AB_x, AB_y = B_x - A_x, B_y - A_y
-        cp3 = AB_x * (self.line_cy - A_y) - AB_y * (self.line_cx - A_x)
-        cp4 = AB_x * (self.line_dy - A_y) - AB_y * (self.line_dx - A_x)
-        diff_side_AB = (cp3 * cp4) <= 0.0
-
-        mask = (diff_side_CD & diff_side_AB) | (min_dist <= (self.safety_radius + 0.1))
+        intersect = segments_intersect(
+            A_x, A_y, B_x, B_y, self.line_cx, self.line_cy, self.line_dx, self.line_dy
+        )
+        mask = intersect | (min_dist <= (self.safety_radius + 0.1))
 
         return [obs for i, obs in enumerate(self.line_obstacles) if mask[i]]

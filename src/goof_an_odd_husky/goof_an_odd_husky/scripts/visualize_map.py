@@ -1,29 +1,38 @@
+from goof_an_odd_husky_common.types import GpsCoord
 import folium
 import networkx as nx
 import osmnx as ox
+from typing import Any, Iterable
 
-from goof_an_odd_husky.global_navigation.graph import coerce_str
+from goof_an_odd_husky_common.helpers import coerce_str
 from goof_an_odd_husky.global_navigation.routing import (
     all_edges_coords,
     stitch_path_coords,
     slice_path,
 )
+from goof_an_odd_husky_common.config import OSM_RELATION_ID
+from goof_an_odd_husky.global_navigation.graph import (
+    load_graph_for_relation,
+    filter_walkable_paved,
+)
+from goof_an_odd_husky.global_navigation.routing import (
+    path_between_nodes,
+    path_between_coordinates,
+)
 
-_COPY_TOAST_JS = """
+ORIGIN_NODE: int = 1707348491
+DESTINATION_NODE: int = 7600216860
+
+ORIGIN_COORD = GpsCoord(49.81793, 24.02362)
+DEST_COORD = GpsCoord(49.82118, 24.02240)
+
+_COPY_TOAST_JS: str = """
 <style>
   #copy-toast {
-    display: none;
-    position: fixed;
-    bottom: 24px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: #333;
-    color: #fff;
-    padding: 8px 18px;
-    border-radius: 6px;
-    font-size: 14px;
-    z-index: 9999;
-    pointer-events: none;
+    display: none; position: fixed; bottom: 24px; left: 50%;
+    transform: translateX(-50%); background: #333; color: #fff;
+    padding: 8px 18px; border-radius: 6px; font-size: 14px;
+    z-index: 9999; pointer-events: none;
   }
 </style>
 <div id="copy-toast">Copied!</div>
@@ -39,7 +48,17 @@ function copyNodeId(nodeId) {
 """
 
 
-def _compute_center(nodes_with_data) -> tuple[float, float]:
+def _compute_center(
+    nodes_with_data: Iterable[tuple[int, dict[str, Any]]],
+) -> tuple[float, float]:
+    """Computes the geographic center of a set of map nodes.
+
+    Args:
+        nodes_with_data: An iterable of (node_id, data_dict) pairs containing 'x' and 'y' coordinates.
+
+    Returns:
+        tuple[float, float]: A tuple containing the (latitude, longitude) center point.
+    """
     nodes_with_data = list(nodes_with_data)
     center_lat = sum(d["y"] for _, d in nodes_with_data) / len(nodes_with_data)
     center_lon = sum(d["x"] for _, d in nodes_with_data) / len(nodes_with_data)
@@ -47,13 +66,19 @@ def _compute_center(nodes_with_data) -> tuple[float, float]:
 
 
 def _draw_graph_edges(folium_map: folium.Map, G: nx.MultiDiGraph) -> None:
+    """Draws all the edges of a NetworkX graph onto a folium map.
+
+    Args:
+        folium_map: The folium map object to populate.
+        G: The NetworkX map graph to draw.
+    """
     for (u, v, data), coords in zip(G.edges(data=True), all_edges_coords(G)):
         highway = coerce_str(data.get("highway", "unknown"))
         surface = coerce_str(data.get("surface", "unknown"))
         length = data.get("length", 0)
 
         folium.PolyLine(
-            locations=coords,
+            locations=[(c.lat, c.lon) for c in coords],
             weight=3,
             color="#3388ff",
             opacity=0.8,
@@ -64,6 +89,13 @@ def _draw_graph_edges(folium_map: folium.Map, G: nx.MultiDiGraph) -> None:
 def _draw_path(
     folium_map: folium.Map, path: list[int], path_graph: nx.MultiDiGraph
 ) -> None:
+    """Draws a highlighted routing path over the folium map.
+
+    Args:
+        folium_map: The folium map object.
+        path: Ordered list of node IDs comprising the path.
+        path_graph: The graph containing the geometric data for the path nodes.
+    """
     total_length = sum(
         path_graph.edges[path[i], path[i + 1], 0].get("length", 0)
         for i in range(len(path) - 1)
@@ -72,7 +104,7 @@ def _draw_path(
     coords = slice_path(stitch_path_coords(path_graph, path))
 
     folium.PolyLine(
-        locations=coords,
+        locations=[(c.lat, c.lon) for c in coords],
         weight=6,
         color="#ff6600",
         opacity=0.95,
@@ -81,7 +113,7 @@ def _draw_path(
 
     for coord in coords:
         folium.CircleMarker(
-            location=coord,
+            location=(coord.lat, coord.lon),
             radius=3,
             color="#ff6600",
             fill=True,
@@ -93,10 +125,18 @@ def _draw_path(
 
 def _draw_nodes(
     folium_map: folium.Map,
-    nodes_with_data,
+    nodes_with_data: Iterable[tuple[int, dict[str, Any]]],
     path_node_set: set[int],
     path_endpoints: tuple[int, int] | None,
 ) -> None:
+    """Draws interactive map nodes indicating path membership and start/end status.
+
+    Args:
+        folium_map: The target folium map.
+        nodes_with_data: An iterable of nodes and their coordinate data.
+        path_node_set: Set of node IDs that belong to the active path.
+        path_endpoints: A tuple containing (start_node_id, end_node_id), or None.
+    """
     endpoint_set = set(path_endpoints) if path_endpoints else set()
 
     for node_id, data in nodes_with_data:
@@ -128,15 +168,27 @@ def build_folium_map(
     path: list[int] | None = None,
     path_graph: nx.MultiDiGraph | None = None,
 ) -> folium.Map:
-    """Build a folium map for any combination of graph and/or path.
+    """Build an interactive Folium map visualizing the map graph and/or computed path.
 
     graph only          → draws all edges and nodes
     graph + path        → draws all edges with the path highlighted
     path + path_graph   → draws only the path (no background edges)
 
     path_graph must be supplied when path nodes are not all present in graph
-    (e.g. synthetic GPS-coordinate nodes from path_between_coordinates).
+    (e.g., synthetic GPS-coordinate nodes from path_between_coordinates).
     When omitted it falls back to graph.
+
+    Args:
+        graph: Optional baseline map graph to draw.
+        path: Optional list of node IDs indicating the A* route.
+        path_graph: Optional specific graph object containing the path nodes.
+
+    Returns:
+        folium.Map: The compiled, interactive Folium map object.
+
+    Raises:
+        ValueError: If neither a graph nor a path is provided, or if a path is
+            provided without an applicable graph containing its nodes.
     """
     if graph is None and path is None:
         raise ValueError("At least one of graph or path must be provided")
@@ -184,3 +236,32 @@ def build_folium_map(
     _draw_nodes(folium_map, nodes_to_render, path_node_set, path_endpoints)
 
     return folium_map
+
+
+def main() -> None:
+    """Executes the test script for downloading OSM maps and exporting HTML visualizers.
+
+    Downloads the specified relation ID graph, computes A* routes both between explicit
+    nodes and raw GPS coordinates, and dumps four distinct visualization HTML files.
+    """
+    print("Fetching and filtering graph...")
+    G_raw = load_graph_for_relation(OSM_RELATION_ID)
+    G = filter_walkable_paved(G_raw)
+    print(f"Graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
+
+    path_nodes = path_between_nodes(G, ORIGIN_NODE, DESTINATION_NODE)
+    build_folium_map(graph=G, path=path_nodes).save("map_node_route.html")
+
+    path_coords, G_extended = path_between_coordinates(G, ORIGIN_COORD, DEST_COORD)
+    build_folium_map(graph=G, path=path_coords, path_graph=G_extended).save(
+        "map_coord_route.html"
+    )
+
+    build_folium_map(graph=G).save("map_graph_only.html")
+    build_folium_map(path=path_nodes, path_graph=G).save("map_path_only.html")
+
+    print("Saved 4 maps.")
+
+
+if __name__ == "__main__":
+    main()

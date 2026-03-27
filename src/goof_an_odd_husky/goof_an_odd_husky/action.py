@@ -1,14 +1,17 @@
 import numpy as np
-from numpy.typing import NDArray
-from typing import Annotated
-from goof_an_odd_husky.helpers import normalize_angle
+
+from goof_an_odd_husky_common.helpers import normalize_angle
+from goof_an_odd_husky_common.types import Trajectory
 
 
-def trajectory_to_action(
-    trajectory: Annotated[NDArray[np.float64], (None, 4)],
-) -> tuple[float, float]:
-    """
-    Converts a trajectory segment into linear and angular velocity commands.
+def trajectory_to_action(trajectory: Trajectory) -> tuple[float, float]:
+    """Converts a trajectory segment into linear and angular velocity commands.
+
+    Args:
+        trajectory: An Nx4 array where each row represents [x, y, theta, dt].
+
+    Returns:
+        tuple[float, float]: A tuple containing (linear_velocity, angular_velocity).
     """
     if trajectory is None or len(trajectory) < 2:
         return 0.0, 0.0

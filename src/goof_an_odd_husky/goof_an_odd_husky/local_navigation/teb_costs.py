@@ -1,20 +1,53 @@
-from goof_an_odd_husky.helpers import normalize_angle, point_segment_distance
-from goof_an_odd_husky_common.obstacles import (
-    CircleObstacle,
-    LineObstacle,
+from goof_an_odd_husky_common.helpers import (
+    normalize_angle,
+    point_segment_distance,
+    segments_intersect,
 )
+from goof_an_odd_husky_common.obstacles import CircleObstacle, LineObstacle
+
 import numpy as np
+from numpy.typing import NDArray
 import pyceres
 
 
 class SegmentLineObstaclesCost(pyceres.CostFunction):
+    """Ceres cost function penalizing proximity to line obstacles.
+
+    Attributes:
+        C_x: Numpy array of line obstacle start X coordinates.
+        C_y: Numpy array of line obstacle start Y coordinates.
+        D_x: Numpy array of line obstacle end X coordinates.
+        D_y: Numpy array of line obstacle end Y coordinates.
+        n_obstacles: Number of line obstacles.
+        weight: The penalty weight multiplier.
+        safety_radius: Minimum allowed distance to an obstacle.
+        softmin_alpha: Parameter controlling the smoothness of the min function.
+    """
+
+    C_x: NDArray[np.float64]
+    C_y: NDArray[np.float64]
+    D_x: NDArray[np.float64]
+    D_y: NDArray[np.float64]
+    n_obstacles: int
+    weight: float
+    safety_radius: float
+    softmin_alpha: float
+
     def __init__(
         self,
         line_obstacles: list[LineObstacle],
         weight: float,
         safety_radius: float,
         softmin_alpha: float = -7.0,
-    ):
+    ) -> None:
+        """Initialize the SegmentLineObstaclesCost.
+
+        Args:
+            line_obstacles: List of detected line obstacles.
+            weight: Cost multiplier.
+            safety_radius: Allowed distance before penalty applies.
+            softmin_alpha: Softmin smoothing factor.
+        """
         super().__init__()
 
         self.C_x = np.array([obs.x1 for obs in line_obstacles], dtype=np.float64)
@@ -30,7 +63,22 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
         self.set_num_residuals(self.n_obstacles)
         self.set_parameter_block_sizes([2, 2])
 
-    def Evaluate(self, parameters, residuals, jacobians):
+    def Evaluate(
+        self,
+        parameters: list[NDArray[np.float64]],
+        residuals: NDArray[np.float64],
+        jacobians: list[NDArray[np.float64] | None] | None,
+    ) -> bool:
+        """Evaluate the cost function and its jacobians.
+
+        Args:
+            parameters: List containing [PointA_xy, PointB_xy].
+            residuals: Output array for the calculated residuals.
+            jacobians: Optional output array for the calculated jacobians.
+
+        Returns:
+            bool: True indicating successful evaluation.
+        """
         A_x, A_y = parameters[0]
         B_x, B_y = parameters[1]
 
@@ -48,39 +96,21 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
         )
 
         all_d = np.vstack([d1, d2, d3, d4])
-
         scaled_d = self.softmin_alpha * all_d
         max_scaled_d = np.max(scaled_d, axis=0)
-
         exp_d = np.exp(scaled_d - max_scaled_d)
         sum_exp = np.sum(exp_d, axis=0)
-
         d_min = (np.log(sum_exp) + max_scaled_d) / self.softmin_alpha
 
         weights = exp_d / sum_exp
         w1, w2, w3, w4 = weights[0], weights[1], weights[2], weights[3]
 
-        CD_x, CD_y = self.D_x - self.C_x, self.D_y - self.C_y
-        CA_x, CA_y = A_x - self.C_x, A_y - self.C_y
-        CB_x, CB_y = B_x - self.C_x, B_y - self.C_y
-
-        cp1 = CD_x * CA_y - CD_y * CA_x
-        cp2 = CD_x * CB_y - CD_y * CB_x
-        diff_side_CD = (cp1 * cp2) <= 0.0
-
-        AB_x, AB_y = B_x - A_x, B_y - A_y
-        AC_x, AC_y = self.C_x - A_x, self.C_y - A_y
-        AD_x, AD_y = self.D_x - A_x, self.D_y - A_y
-
-        cp3 = AB_x * AC_y - AB_y * AC_x
-        cp4 = AB_x * AD_y - AB_y * AD_x
-        diff_side_AB = (cp3 * cp4) <= 0.0
-
-        intersect = diff_side_CD & diff_side_AB
-
+        intersect = segments_intersect(
+            A_x, A_y, B_x, B_y, self.C_x, self.C_y, self.D_x, self.D_y
+        )
         sign_mask = np.where(intersect, -1.0, 1.0)
-        errors = self.safety_radius - sign_mask * d_min
 
+        errors = self.safety_radius - sign_mask * d_min
         active_mask = errors > 0.0
         residuals[:] = np.where(active_mask, self.weight * errors, 0.0)
 
@@ -89,49 +119,75 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
             inv_d2 = 1.0 / np.maximum(d2, 1e-8)
             inv_d3 = 1.0 / np.maximum(d3, 1e-8)
             inv_d4 = 1.0 / np.maximum(d4, 1e-8)
-
             z = np.zeros(self.n_obstacles)
 
-            gA1_x, gA1_y = u1_x * inv_d1, u1_y * inv_d1
-            gB1_x, gB1_y = z, z
-
-            gA2_x, gA2_y = z, z
-            gB2_x, gB2_y = u2_x * inv_d2, u2_y * inv_d2
-
-            gA3_x, gA3_y = -(1.0 - t3) * u3_x * inv_d3, -(1.0 - t3) * u3_y * inv_d3
-            gB3_x, gB3_y = -t3 * u3_x * inv_d3, -t3 * u3_y * inv_d3
-
-            gA4_x, gA4_y = -(1.0 - t4) * u4_x * inv_d4, -(1.0 - t4) * u4_y * inv_d4
-            gB4_x, gB4_y = -t4 * u4_x * inv_d4, -t4 * u4_y * inv_d4
-
-            gA_x_min = w1 * gA1_x + w2 * gA2_x + w3 * gA3_x + w4 * gA4_x
-            gA_y_min = w1 * gA1_y + w2 * gA2_y + w3 * gA3_y + w4 * gA4_y
-
-            gB_x_min = w1 * gB1_x + w2 * gB2_x + w3 * gB3_x + w4 * gB4_x
-            gB_y_min = w1 * gB1_y + w2 * gB2_y + w3 * gB3_y + w4 * gB4_y
+            gA_x_min = (
+                w1 * u1_x * inv_d1
+                + w3 * (-(1.0 - t3) * u3_x * inv_d3)
+                + w4 * (-(1.0 - t4) * u4_x * inv_d4)
+            )
+            gA_y_min = (
+                w1 * u1_y * inv_d1
+                + w3 * (-(1.0 - t3) * u3_y * inv_d3)
+                + w4 * (-(1.0 - t4) * u4_y * inv_d4)
+            )
+            gB_x_min = (
+                w2 * u2_x * inv_d2
+                + w3 * (-t3 * u3_x * inv_d3)
+                + w4 * (-t4 * u4_x * inv_d4)
+            )
+            gB_y_min = (
+                w2 * u2_y * inv_d2
+                + w3 * (-t3 * u3_y * inv_d3)
+                + w4 * (-t4 * u4_y * inv_d4)
+            )
 
             j_scaler = np.where(active_mask, self.weight * (-sign_mask), 0.0)
 
             if jacobians[0] is not None:
-                J_A_x = j_scaler * gA_x_min
-                J_A_y = j_scaler * gA_y_min
-                jacobians[0][:] = np.vstack((J_A_x, J_A_y)).T.ravel()
-
+                jacobians[0][:] = np.vstack(
+                    (j_scaler * gA_x_min, j_scaler * gA_y_min)
+                ).T.ravel()
             if jacobians[1] is not None:
-                J_B_x = j_scaler * gB_x_min
-                J_B_y = j_scaler * gB_y_min
-                jacobians[1][:] = np.vstack((J_B_x, J_B_y)).T.ravel()
+                jacobians[1][:] = np.vstack(
+                    (j_scaler * gB_x_min, j_scaler * gB_y_min)
+                ).T.ravel()
 
         return True
 
 
 class SegmentCircleObstaclesCost(pyceres.CostFunction):
+    """Ceres cost function penalizing proximity to circular obstacles.
+
+    Attributes:
+        obstacles_x: Numpy array of obstacle X coordinates.
+        obstacles_y: Numpy array of obstacle Y coordinates.
+        obstacles_r: Numpy array of obstacle radii.
+        n_obstacles: Number of obstacles.
+        weight: Penalty weight multiplier.
+        safety_radius: Added buffer radius to the obstacle.
+    """
+
+    obstacles_x: NDArray[np.float64]
+    obstacles_y: NDArray[np.float64]
+    obstacles_r: NDArray[np.float64]
+    n_obstacles: int
+    weight: float
+    safety_radius: float
+
     def __init__(
         self,
         circle_obstacles: list[CircleObstacle],
         weight: float,
         safety_radius: float,
-    ):
+    ) -> None:
+        """Initialize the SegmentCircleObstaclesCost.
+
+        Args:
+            circle_obstacles: List of detected circular obstacles.
+            weight: Cost multiplier.
+            safety_radius: Buffer distance added to the obstacle radius.
+        """
         super().__init__()
 
         self.obstacles_x = np.array(
@@ -151,7 +207,22 @@ class SegmentCircleObstaclesCost(pyceres.CostFunction):
         self.set_num_residuals(self.n_obstacles)
         self.set_parameter_block_sizes([2, 2])
 
-    def Evaluate(self, parameters, residuals, jacobians):
+    def Evaluate(
+        self,
+        parameters: list[NDArray[np.float64]],
+        residuals: NDArray[np.float64],
+        jacobians: list[NDArray[np.float64] | None] | None,
+    ) -> bool:
+        """Evaluate the cost function and its jacobians.
+
+        Args:
+            parameters: List containing [PointA_xy, PointB_xy].
+            residuals: Output array for the calculated residuals.
+            jacobians: Optional output array for the calculated jacobians.
+
+        Returns:
+            bool: True indicating successful evaluation.
+        """
         A_x, A_y = parameters[0]
         B_x, B_y = parameters[1]
 
@@ -159,12 +230,9 @@ class SegmentCircleObstaclesCost(pyceres.CostFunction):
         AB_y = B_y - A_y
         AB_len_sq = max(AB_x**2 + AB_y**2, 1e-10)
 
-        # O - obstacle
         AO_x = self.obstacles_x - A_x
         AO_y = self.obstacles_y - A_y
 
-        # AO1 - projection of AO onto AB
-        # t = |AO1|/|AB|
         t = (AO_x * AB_x + AO_y * AB_y) / AB_len_sq
         t = np.clip(t, 0.0, 1.0)
 
@@ -180,12 +248,10 @@ class SegmentCircleObstaclesCost(pyceres.CostFunction):
         residuals[:] = np.where(mask, w * errors, 0.0)
 
         if jacobians is not None:
-            # d_hat = O1O / |O1O|
             inv_dist = 1.0 / O1O_len
             d_hat_x = O1O_x * inv_dist
             d_hat_y = O1O_y * inv_dist
 
-            # error < 0 => jacobian = 0
             j_scaler = np.where(mask, w, 0.0)
 
             if jacobians[0] is not None:
@@ -206,7 +272,23 @@ class SegmentCircleObstaclesCost(pyceres.CostFunction):
 
 
 class SegmentVelocityCost(pyceres.CostFunction):
-    def __init__(self, weight: float, max_v: float):
+    """Ceres cost function penalizing velocities exceeding the maximum.
+
+    Attributes:
+        weight: Penalty weight multiplier.
+        max_v: Maximum allowed linear velocity.
+    """
+
+    weight: float
+    max_v: float
+
+    def __init__(self, weight: float, max_v: float) -> None:
+        """Initialize SegmentVelocityCost.
+
+        Args:
+            weight: Cost multiplier.
+            max_v: Maximum linear velocity allowed.
+        """
         super().__init__()
         self.weight = weight
         self.max_v = max_v
@@ -214,7 +296,22 @@ class SegmentVelocityCost(pyceres.CostFunction):
         self.set_num_residuals(1)
         self.set_parameter_block_sizes([2, 2, 1])
 
-    def Evaluate(self, parameters, residuals, jacobians):
+    def Evaluate(
+        self,
+        parameters: list[NDArray[np.float64]],
+        residuals: NDArray[np.float64],
+        jacobians: list[NDArray[np.float64] | None] | None,
+    ) -> bool:
+        """Evaluate the cost function and its jacobians.
+
+        Args:
+            parameters: List containing [PointA_xy, PointB_xy, dt].
+            residuals: Output array for the calculated residuals.
+            jacobians: Optional output array for the calculated jacobians.
+
+        Returns:
+            bool: True indicating successful evaluation.
+        """
         A_x, A_y = parameters[0]
         B_x, B_y = parameters[1]
         dt = parameters[2][0]
@@ -228,7 +325,7 @@ class SegmentVelocityCost(pyceres.CostFunction):
 
         v = AB_len * inv_dt
 
-        diff = 0
+        diff = 0.0
         if v > self.max_v:
             diff = v - self.max_v
 
@@ -257,7 +354,6 @@ class SegmentVelocityCost(pyceres.CostFunction):
                 jacobians[1][1] = AB_y * scale
 
             if jacobians[2] is not None:
-                # dv/dt = -AB_len / dt^2 = -v / dt
                 dv_dt = -v * inv_dt
                 jacobians[2][0] = dr_dv * dv_dt
 
@@ -265,7 +361,23 @@ class SegmentVelocityCost(pyceres.CostFunction):
 
 
 class SegmentAngularVelocityCost(pyceres.CostFunction):
-    def __init__(self, weight: float, max_omega: float):
+    """Ceres cost function penalizing angular velocities exceeding the maximum.
+
+    Attributes:
+        weight: Penalty weight multiplier.
+        max_omega: Maximum allowed angular velocity.
+    """
+
+    weight: float
+    max_omega: float
+
+    def __init__(self, weight: float, max_omega: float) -> None:
+        """Initialize SegmentAngularVelocityCost.
+
+        Args:
+            weight: Cost multiplier.
+            max_omega: Maximum angular velocity allowed.
+        """
         super().__init__()
         self.weight = weight
         self.max_omega = max_omega
@@ -273,7 +385,22 @@ class SegmentAngularVelocityCost(pyceres.CostFunction):
         self.set_num_residuals(1)
         self.set_parameter_block_sizes([1, 1, 1])
 
-    def Evaluate(self, parameters, residuals, jacobians):
+    def Evaluate(
+        self,
+        parameters: list[NDArray[np.float64]],
+        residuals: NDArray[np.float64],
+        jacobians: list[NDArray[np.float64] | None] | None,
+    ) -> bool:
+        """Evaluate the cost function and its jacobians.
+
+        Args:
+            parameters: List containing [PointA_theta, PointB_theta, dt].
+            residuals: Output array for the calculated residuals.
+            jacobians: Optional output array for the calculated jacobians.
+
+        Returns:
+            bool: True indicating successful evaluation.
+        """
         A_theta = parameters[0][0]
         B_theta = parameters[1][0]
         dt = parameters[2][0]
@@ -285,7 +412,7 @@ class SegmentAngularVelocityCost(pyceres.CostFunction):
 
         omega = delta_theta * inv_dt
 
-        diff = 0
+        diff = 0.0
         if omega > self.max_omega:
             diff = omega - self.max_omega
         elif omega < -self.max_omega:
@@ -295,7 +422,7 @@ class SegmentAngularVelocityCost(pyceres.CostFunction):
         residuals[0] = w * diff
 
         if jacobians is not None:
-            if omega <= self.max_omega:
+            if abs(omega) <= self.max_omega:
                 if jacobians[0] is not None:
                     jacobians[0][0] = 0.0
                 if jacobians[1] is not None:
@@ -319,14 +446,45 @@ class SegmentAngularVelocityCost(pyceres.CostFunction):
 
 
 class SegmentAccelerationCost(pyceres.CostFunction):
-    def __init__(self, weight: float, max_a: float):
+    """Ceres cost function penalizing linear accelerations exceeding the maximum.
+
+    Attributes:
+        weight: Penalty weight multiplier.
+        max_a: Maximum allowed linear acceleration.
+    """
+
+    weight: float
+    max_a: float
+
+    def __init__(self, weight: float, max_a: float) -> None:
+        """Initialize SegmentAccelerationCost.
+
+        Args:
+            weight: Cost multiplier.
+            max_a: Maximum linear acceleration allowed.
+        """
         super().__init__()
         self.weight = weight
         self.max_a = max_a
         self.set_num_residuals(1)
         self.set_parameter_block_sizes([2, 2, 2, 1, 1])
 
-    def Evaluate(self, parameters, residuals, jacobians):
+    def Evaluate(
+        self,
+        parameters: list[NDArray[np.float64]],
+        residuals: NDArray[np.float64],
+        jacobians: list[NDArray[np.float64] | None] | None,
+    ) -> bool:
+        """Evaluate the cost function and its jacobians.
+
+        Args:
+            parameters: List containing [PointA_xy, PointB_xy, PointC_xy, dt1, dt2].
+            residuals: Output array for the calculated residuals.
+            jacobians: Optional output array for the calculated jacobians.
+
+        Returns:
+            bool: True indicating successful evaluation.
+        """
         A = parameters[0]
         B = parameters[1]
         C = parameters[2]
@@ -398,7 +556,23 @@ class SegmentAccelerationCost(pyceres.CostFunction):
 
 
 class SegmentAngularAccelerationCost(pyceres.CostFunction):
-    def __init__(self, weight: float, max_alpha: float):
+    """Ceres cost function penalizing angular accelerations exceeding the maximum.
+
+    Attributes:
+        weight: Penalty weight multiplier.
+        max_alpha: Maximum allowed angular acceleration.
+    """
+
+    weight: float
+    max_alpha: float
+
+    def __init__(self, weight: float, max_alpha: float) -> None:
+        """Initialize SegmentAngularAccelerationCost.
+
+        Args:
+            weight: Cost multiplier.
+            max_alpha: Maximum angular acceleration allowed.
+        """
         super().__init__()
         self.weight = weight
         self.max_alpha = max_alpha
@@ -406,7 +580,22 @@ class SegmentAngularAccelerationCost(pyceres.CostFunction):
         self.set_num_residuals(1)
         self.set_parameter_block_sizes([1, 1, 1, 1, 1])
 
-    def Evaluate(self, parameters, residuals, jacobians):
+    def Evaluate(
+        self,
+        parameters: list[NDArray[np.float64]],
+        residuals: NDArray[np.float64],
+        jacobians: list[NDArray[np.float64] | None] | None,
+    ) -> bool:
+        """Evaluate the cost function and its jacobians.
+
+        Args:
+            parameters: List containing [PointA_theta, PointB_theta, PointC_theta, dt1, dt2].
+            residuals: Output array for the calculated residuals.
+            jacobians: Optional output array for the calculated jacobians.
+
+        Returns:
+            bool: True indicating successful evaluation.
+        """
         A_theta = parameters[0][0]
         B_theta = parameters[1][0]
         C_theta = parameters[2][0]
@@ -473,7 +662,30 @@ class SegmentAngularAccelerationCost(pyceres.CostFunction):
 
 
 class StartAccelerationCost(pyceres.CostFunction):
-    def __init__(self, weight: float, max_a: float, current_v: tuple[float, float]):
+    """Ceres cost function penalizing starting linear acceleration.
+
+    Attributes:
+        weight: Penalty weight multiplier.
+        max_a: Maximum allowed linear acceleration.
+        vx_start: Initial X velocity.
+        vy_start: Initial Y velocity.
+    """
+
+    weight: float
+    max_a: float
+    vx_start: float
+    vy_start: float
+
+    def __init__(
+        self, weight: float, max_a: float, current_v: tuple[float, float]
+    ) -> None:
+        """Initialize StartAccelerationCost.
+
+        Args:
+            weight: Cost multiplier.
+            max_a: Maximum linear acceleration allowed.
+            current_v: The starting linear velocity vector (vx, vy).
+        """
         super().__init__()
         self.weight = weight
         self.max_a = max_a
@@ -483,7 +695,22 @@ class StartAccelerationCost(pyceres.CostFunction):
         self.set_num_residuals(1)
         self.set_parameter_block_sizes([2, 2, 1])
 
-    def Evaluate(self, parameters, residuals, jacobians):
+    def Evaluate(
+        self,
+        parameters: list[NDArray[np.float64]],
+        residuals: NDArray[np.float64],
+        jacobians: list[NDArray[np.float64] | None] | None,
+    ) -> bool:
+        """Evaluate the cost function and its jacobians.
+
+        Args:
+            parameters: List containing [Point_start, Point_next, dt].
+            residuals: Output array for the calculated residuals.
+            jacobians: Optional output array for the calculated jacobians.
+
+        Returns:
+            bool: True indicating successful evaluation.
+        """
         P_start = parameters[0]
         P_next = parameters[1]
         dt = parameters[2][0]
@@ -532,7 +759,26 @@ class StartAccelerationCost(pyceres.CostFunction):
 
 
 class StartAngularAccelerationCost(pyceres.CostFunction):
-    def __init__(self, weight: float, max_alpha: float, current_omega: float):
+    """Ceres cost function penalizing starting angular acceleration.
+
+    Attributes:
+        weight: Penalty weight multiplier.
+        max_alpha: Maximum allowed angular acceleration.
+        omega_start: Initial angular velocity.
+    """
+
+    weight: float
+    max_alpha: float
+    omega_start: float
+
+    def __init__(self, weight: float, max_alpha: float, current_omega: float) -> None:
+        """Initialize StartAngularAccelerationCost.
+
+        Args:
+            weight: Cost multiplier.
+            max_alpha: Maximum angular acceleration allowed.
+            current_omega: The starting angular velocity.
+        """
         super().__init__()
         self.weight = weight
         self.max_alpha = max_alpha
@@ -540,7 +786,22 @@ class StartAngularAccelerationCost(pyceres.CostFunction):
         self.set_parameter_block_sizes([1, 1, 1])
         self.set_num_residuals(1)
 
-    def Evaluate(self, parameters, residuals, jacobians):
+    def Evaluate(
+        self,
+        parameters: list[NDArray[np.float64]],
+        residuals: NDArray[np.float64],
+        jacobians: list[NDArray[np.float64] | None] | None,
+    ) -> bool:
+        """Evaluate the cost function and its jacobians.
+
+        Args:
+            parameters: List containing [theta_start, theta_next, dt].
+            residuals: Output array for the calculated residuals.
+            jacobians: Optional output array for the calculated jacobians.
+
+        Returns:
+            bool: True indicating successful evaluation.
+        """
         th_start = parameters[0][0]
         th_next = parameters[1][0]
         dt = parameters[2][0]
@@ -587,14 +848,42 @@ class StartAngularAccelerationCost(pyceres.CostFunction):
 
 
 class SegmentKinematicsCost(pyceres.CostFunction):
-    def __init__(self, weight: float):
+    """Ceres cost function enforcing non-holonomic kinematic constraints.
+
+    Attributes:
+        weight: Penalty weight multiplier.
+    """
+
+    weight: float
+
+    def __init__(self, weight: float) -> None:
+        """Initialize SegmentKinematicsCost.
+
+        Args:
+            weight: Cost multiplier.
+        """
         super().__init__()
         self.weight = weight
 
         self.set_num_residuals(1)
         self.set_parameter_block_sizes([2, 1, 2, 1])
 
-    def Evaluate(self, parameters, residuals, jacobians):
+    def Evaluate(
+        self,
+        parameters: list[NDArray[np.float64]],
+        residuals: NDArray[np.float64],
+        jacobians: list[NDArray[np.float64] | None] | None,
+    ) -> bool:
+        """Evaluate the cost function and its jacobians.
+
+        Args:
+            parameters: List containing [xy1, theta1, xy2, theta2].
+            residuals: Output array for the calculated residuals.
+            jacobians: Optional output array for the calculated jacobians.
+
+        Returns:
+            bool: True indicating successful evaluation.
+        """
         x1, y1 = parameters[0]
         angle1 = parameters[1][0]
         x2, y2 = parameters[2]
@@ -636,13 +925,41 @@ class SegmentKinematicsCost(pyceres.CostFunction):
 
 
 class SegmentHeadingCost(pyceres.CostFunction):
-    def __init__(self, weight: float):
+    """Ceres cost function penalizing driving backwards.
+
+    Attributes:
+        weight: Penalty weight multiplier.
+    """
+
+    weight: float
+
+    def __init__(self, weight: float) -> None:
+        """Initialize SegmentHeadingCost.
+
+        Args:
+            weight: Cost multiplier.
+        """
         super().__init__()
         self.weight = weight
         self.set_num_residuals(1)
         self.set_parameter_block_sizes([2, 1, 2])
 
-    def Evaluate(self, parameters, residuals, jacobians):
+    def Evaluate(
+        self,
+        parameters: list[NDArray[np.float64]],
+        residuals: NDArray[np.float64],
+        jacobians: list[NDArray[np.float64] | None] | None,
+    ) -> bool:
+        """Evaluate the cost function and its jacobians.
+
+        Args:
+            parameters: List containing [xy1, theta1, xy2].
+            residuals: Output array for the calculated residuals.
+            jacobians: Optional output array for the calculated jacobians.
+
+        Returns:
+            bool: True indicating successful evaluation.
+        """
         x1, y1 = parameters[0]
         theta1 = parameters[1][0]
         x2, y2 = parameters[2]
@@ -684,14 +1001,42 @@ class SegmentHeadingCost(pyceres.CostFunction):
 
 
 class SegmentAngularSmoothingCost(pyceres.CostFunction):
-    def __init__(self, weight: float):
+    """Ceres cost function minimizing angular velocity changes to smooth the trajectory.
+
+    Attributes:
+        weight: Penalty weight multiplier.
+    """
+
+    weight: float
+
+    def __init__(self, weight: float) -> None:
+        """Initialize SegmentAngularSmoothingCost.
+
+        Args:
+            weight: Cost multiplier.
+        """
         super().__init__()
         self.weight = weight
 
         self.set_num_residuals(1)
         self.set_parameter_block_sizes([1, 1, 1])
 
-    def Evaluate(self, parameters, residuals, jacobians):
+    def Evaluate(
+        self,
+        parameters: list[NDArray[np.float64]],
+        residuals: NDArray[np.float64],
+        jacobians: list[NDArray[np.float64] | None] | None,
+    ) -> bool:
+        """Evaluate the cost function and its jacobians.
+
+        Args:
+            parameters: List containing [theta1, theta2, dt].
+            residuals: Output array for the calculated residuals.
+            jacobians: Optional output array for the calculated jacobians.
+
+        Returns:
+            bool: True indicating successful evaluation.
+        """
         theta1 = parameters[0][0]
         theta2 = parameters[1][0]
         dt = parameters[2][0]
@@ -721,14 +1066,42 @@ class SegmentAngularSmoothingCost(pyceres.CostFunction):
 
 
 class SegmentTimeCost(pyceres.CostFunction):
-    def __init__(self, weight: float):
+    """Ceres cost function penalizing traversal time to encourage faster completion.
+
+    Attributes:
+        weight: Penalty weight multiplier.
+    """
+
+    weight: float
+
+    def __init__(self, weight: float) -> None:
+        """Initialize SegmentTimeCost.
+
+        Args:
+            weight: Cost multiplier.
+        """
         super().__init__()
         self.weight = weight
 
         self.set_num_residuals(1)
         self.set_parameter_block_sizes([1])
 
-    def Evaluate(self, parameters, residuals, jacobians):
+    def Evaluate(
+        self,
+        parameters: list[NDArray[np.float64]],
+        residuals: NDArray[np.float64],
+        jacobians: list[NDArray[np.float64] | None] | None,
+    ) -> bool:
+        """Evaluate the cost function and its jacobians.
+
+        Args:
+            parameters: List containing [dt].
+            residuals: Output array for the calculated residuals.
+            jacobians: Optional output array for the calculated jacobians.
+
+        Returns:
+            bool: True indicating successful evaluation.
+        """
         dt = parameters[0][0]
 
         w = self.weight

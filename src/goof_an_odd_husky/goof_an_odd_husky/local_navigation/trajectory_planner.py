@@ -1,7 +1,10 @@
-from goof_an_odd_husky_common.obstacles import Obstacle
 from abc import ABC, abstractmethod
+
 import numpy as np
 from numpy.typing import NDArray
+
+from goof_an_odd_husky_common.types import Trajectory
+from goof_an_odd_husky_common.obstacles import Obstacle
 
 
 class TrajectoryPlanner(ABC):
@@ -44,13 +47,11 @@ class TrajectoryPlanner(ABC):
         self.obstacles = obstacles
 
     @abstractmethod
-    def plan(self) -> NDArray[np.floating] | None:
+    def plan(self) -> Trajectory | None:
         """Compute a trajectory from start to goal avoiding obstacles.
 
         Returns:
-            Nx4 numpy array where each row is [x, y, theta, dt] representing
-            the planned trajectory, or None if no valid path exists.
-            dt represents the time duration to reach the next point.
+            Trajectory | None: Nx4 array [x, y, theta, dt] or None if no valid path exists.
         """
         ...
 
@@ -59,17 +60,18 @@ class TrajectoryPlanner(ABC):
         """Return the distance to the goal.
 
         Returns:
-            The straight line distance to the goal.
+            float: The straight line distance to the goal.
         """
         ...
 
-    def transform_trajectory(self, dx: float, dy: float, dtheta: float):
-        """
-        Transforms the internal trajectory guess to account for robot motion.
+    def transform_trajectory(self, dx: float, dy: float, dtheta: float) -> None:
+        """Transforms the internal trajectory guess to account for robot motion.
+
         This keeps the trajectory aligned with the world while the robot frame moves.
 
         Args:
-            dx, dy: Change in robot position relative to the previous frame's frame.
+            dx: Change in robot position X relative to the previous frame's frame.
+            dy: Change in robot position Y.
             dtheta: Change in robot heading.
         """
         ...
@@ -79,38 +81,39 @@ class TrajectoryPlanner(ABC):
         new_xy: tuple[float, float],
         new_theta: tuple[float],
     ) -> None:
-        """
-        Move the goal point.
+        """Move the goal point.
 
         Args:
-            new_xy: a tuple of x and y coordinates (relative) of the goal.
-            new_theta: a tuple of a theta - angle (relative) of the vehicle when positioned at the goal
+            new_xy: A tuple of x and y coordinates (relative) of the goal.
+            new_theta: A tuple containing the orientation of the vehicle at the goal.
         """
         ...
 
     def refine(
         self,
         iterations: int = 1,
-        current_velocity: float = 0,
-        current_omega: float = 0,
+        current_velocity: float = 0.0,
+        current_omega: float = 0.0,
     ) -> bool:
         """Refine the current trajectory (optional for some planners).
 
         Default implementation does nothing. Override for optimization-based planners.
 
         Args:
-            iterations: how many iterations to take during a single refinement.
-            current_velocity: current velocity (in m/s).
-            current_omega: current angular velocity (in rad/s).
+            iterations: How many iterations to take during a single refinement.
+            current_velocity: Current linear velocity (in m/s).
+            current_omega: Current angular velocity (in rad/s).
+
+        Returns:
+            bool: Success status of the refinement process.
         """
         return True
 
-    def get_trajectory(self) -> NDArray[np.floating] | None:
+    def get_trajectory(self) -> Trajectory | None:
         """Get the current planned trajectory.
 
         Returns:
-            Nx4 numpy array where each row is [x, y, theta, dt], or None if
-            no trajectory has been computed yet.
+            Trajectory | None: Nx4 array [x, y, theta, dt], or None if not yet computed.
         """
         return self.plan()
 
@@ -119,7 +122,7 @@ class TrajectoryPlanner(ABC):
         """Get the length of the current trajectory.
 
         Returns:
-            The length of the current trajectory
+            int: The number of waypoints in the current trajectory.
         """
         ...
 

@@ -2,11 +2,9 @@ import threading
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.spatial.transform import Rotation
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from nav_msgs.msg import Path
@@ -18,13 +16,10 @@ from pyqtgraph.Qt import QtCore
 
 from goof_an_odd_husky_msgs.msg import ObstacleArray
 from goof_an_odd_husky_common.obstacles import msg_to_obstacles
+from goof_an_odd_husky_common.qos import LATCHED_QOS
+from goof_an_odd_husky_common.config import USE_GPS
+from goof_an_odd_husky_common.helpers import quat_to_yaw
 from goof_an_odd_husky_viz.visualizer import TrajectoryVisualizer
-
-LATCHED_QOS = QoSProfile(
-    depth=1,
-    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
-    reliability=QoSReliabilityPolicy.RELIABLE,
-)
 
 
 class VisualizerNode(Node):
@@ -126,14 +121,12 @@ class VisualizerNode(Node):
         self.cancel_publisher.publish(Empty())
 
     def _on_pose(self, msg: PoseStamped) -> None:
-        yaw = Rotation.from_quat(
-            [
-                msg.pose.orientation.x,
-                msg.pose.orientation.y,
-                msg.pose.orientation.z,
-                msg.pose.orientation.w,
-            ]
-        ).as_euler("zyx")[0]
+        yaw = quat_to_yaw(
+            msg.pose.orientation.x,
+            msg.pose.orientation.y,
+            msg.pose.orientation.z,
+            msg.pose.orientation.w,
+        )
         with self.data_lock:
             self.pending_robot_pose = [msg.pose.position.x, msg.pose.position.y, yaw]
 
@@ -143,14 +136,12 @@ class VisualizerNode(Node):
                 [
                     p.pose.position.x,
                     p.pose.position.y,
-                    Rotation.from_quat(
-                        [
-                            p.pose.orientation.x,
-                            p.pose.orientation.y,
-                            p.pose.orientation.z,
-                            p.pose.orientation.w,
-                        ]
-                    ).as_euler("zyx")[0],
+                    quat_to_yaw(
+                        p.pose.orientation.x,
+                        p.pose.orientation.y,
+                        p.pose.orientation.z,
+                        p.pose.orientation.w,
+                    ),
                 ]
                 for p in msg.poses
             ]
@@ -205,7 +196,7 @@ class VisualizerNode(Node):
 
 def main(args=None) -> None:
     rclpy.init(args=args)
-    node = VisualizerNode(use_gps=True)
+    node = VisualizerNode(use_gps=USE_GPS)
 
     executor = MultiThreadedExecutor(num_threads=2)
     executor.add_node(node)

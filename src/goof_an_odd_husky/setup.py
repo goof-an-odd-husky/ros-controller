@@ -20,8 +20,7 @@ setup(
     entry_points={
         "console_scripts": [
             "controller_node = goof_an_odd_husky.controller_node:main",
-            "visualize_map = goof_an_odd_husky.visualization.visualize_test_map:main",
-            "visualize_trajectory = goof_an_odd_husky.visualization.visualize_test_trajectory:main",
+            "visualize_map = goof_an_odd_husky.scripts.visualize_map:main",
         ],
     },
 )

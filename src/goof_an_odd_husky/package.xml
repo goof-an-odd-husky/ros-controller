@@ -18,6 +18,7 @@
   <depend>python3-matplotlib</depend>
   <depend>python3-pyqtgraph</depend>
   <depend>python3-sklearn</depend>
+  <depend>python3-shapely</depend>
   <depend>pyceres</depend>
   <depend>folium</depend>
   <depend>osmnx</depend>

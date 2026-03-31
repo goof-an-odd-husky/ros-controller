@@ -1,5 +1,3 @@
-import json
-import time
 import threading
 
 import rclpy
@@ -17,6 +15,7 @@ from std_msgs.msg import String, Empty
 from goof_an_odd_husky_common.config import (
     TOPICS,
     MAX_TRAJECTORY_DISTANCE,
+    BARRIER_OFFSET,
     HEARTBEAT_TIMEOUT_SEC,
     USE_GPS,
     DEBUG,
@@ -25,6 +24,7 @@ from goof_an_odd_husky_common.helpers import (
     quat_to_yaw,
     yaw_to_quat,
 )
+from goof_an_odd_husky.performance_tracker import PerformanceTracker
 from goof_an_odd_husky_common.types import (
     Pose2D,
     Trajectory,
@@ -340,144 +340,135 @@ class ControllerNode(Node):
 
     def control_loop(self) -> None:
         """Main control loop responsible for executing planner step and publishing commands."""
-        start_time = time.perf_counter()
-        performance = {}
 
-        with self.data_lock:
-            scan, scan_time = self.latest_scan, self.last_scan_time
-            odom_g = self.latest_odom
-            gps_data = self.latest_gps
+        with PerformanceTracker(self.get_logger(), log_level='debug', throttle_sec=2.0) as performance:
 
-        t1 = time.perf_counter()
-        performance["Data acquisition"] = round((t1 - start_time) * 1000, 2)
+            with self.data_lock:
+                scan, scan_time = self.latest_scan, self.last_scan_time
+                odom_g = self.latest_odom
+                gps_data = self.latest_gps
 
-        if scan is None or odom_g is None or (self.use_gps and gps_data is None):
-            self._log_missing_sensors(scan, odom_g, gps_data)
-            return
+            performance.update("Data acquisition")
 
-        self._update_odometry(odom_g)
+            if scan is None or odom_g is None or (self.use_gps and gps_data is None):
+                self._log_missing_sensors(scan, odom_g, gps_data)
+                return
 
-        o = odom_g.pose.pose.orientation
-        robot_pose = Pose2D(
-            odom_g.pose.pose.position.x,
-            odom_g.pose.pose.position.y,
-            quat_to_yaw(o.x, o.y, o.z, o.w),
-        )
+            self._update_odometry(odom_g)
 
-        self._log_robot_location(robot_pose, gps_data)
-
-        if not self._visualizer_is_alive():
-            self.get_logger().warn(
-                "Waiting for visualizer...", throttle_duration_sec=2.0
+            o = odom_g.pose.pose.orientation
+            robot_pose = Pose2D(
+                odom_g.pose.pose.position.x,
+                odom_g.pose.pose.position.y,
+                quat_to_yaw(o.x, o.y, o.z, o.w),
             )
-            self._publish_velocity(0.0, 0.0)
-            return
 
-        self.path_manager.update_local_path_from_gps(
-            gps_data, robot_pose.x, robot_pose.y
-        )
-        local_path_snapshot = self.path_manager.get_local_path_snapshot()
-        if local_path_snapshot:
-            self._publish_global_path(local_path_snapshot)
+            self._log_robot_location(robot_pose, gps_data)
 
-        detected_obstacles = self._process_obstacles(scan, scan_time)
-        t2 = time.perf_counter()
-        performance["Obstacle processing"] = round((t2 - t1) * 1000, 2)
+            if not self._visualizer_is_alive():
+                self.get_logger().warn("Waiting for visualizer...", throttle_duration_sec=2.0)
+                self._publish_velocity(0.0, 0.0)
+                return
 
-        if detected_obstacles is None:
-            self._publish_velocity(0.0, 0.0)
-            return
+            self.path_manager.update_local_path_from_gps(gps_data, robot_pose.x, robot_pose.y)
+            local_path_snapshot = self.path_manager.get_local_path_snapshot()
+            if local_path_snapshot:
+                self._publish_global_path(local_path_snapshot)
 
-        self._publish_obstacles(detected_obstacles)
+            detected_obstacles = self._process_obstacles(scan, scan_time)
+            performance.update("Obstacle processing")
 
-        if not self.path_manager.has_goal():
+            if detected_obstacles is None:
+                self._publish_velocity(0.0, 0.0)
+                return
+
+            if not self.path_manager.has_goal():
+                self._publish_robot_pose(robot_pose)
+                self._publish_velocity(0.0, 0.0)
+                return
+
+            if self.use_gps and not self.first_gps:
+                self.get_logger().warn("Waiting for GPS anchor...", throttle_duration_sec=2.0)
+                return
+
+            self.path_manager.generate_path(gps_data, robot_pose.x, robot_pose.y)
+
+            if self.path_manager.check_goal_reached(robot_pose.x, robot_pose.y):
+                self._publish_velocity(0.0, 0.0)
+                self._publish_status("goal_reached")
+                return
+
+            local_path_snapshot = self.path_manager.get_local_path_snapshot()
+            selection = self.goal_selector.select_local_goal(
+                path=local_path_snapshot,
+                start_index=self.path_manager.get_current_index(),
+                vehicle_x=robot_pose.x,
+                vehicle_y=robot_pose.y,
+                yaw=robot_pose.theta,
+                detected_obstacles=detected_obstacles,
+            )
+            performance.update("Goal update")
+
+            if selection is None:
+                self._publish_velocity(0.0, 0.0)
+                return
+
+            local_goal, new_closest_idx, target_idx = selection
+            corridor_line_obstacles = self.goal_selector.generate_corridor_barriers(
+                path=local_path_snapshot,
+                closest_idx=new_closest_idx,
+                target_idx=target_idx,
+                vehicle_x=robot_pose.x,
+                vehicle_y=robot_pose.y,
+                yaw=robot_pose.theta,
+                barrier_offset=BARRIER_OFFSET,
+            )
+            detected_obstacles.extend(corridor_line_obstacles[0])
+            detected_obstacles.extend(corridor_line_obstacles[1])
+
+            self._publish_obstacles(detected_obstacles)
+            self.path_manager.update_current_index(new_closest_idx)
+
+            performance.update("Corridor generation")
+
+            self.planner.move_goal(local_goal, (0.0,))
+            if self.needs_initial_plan:
+                self.planner.plan()
+                self.needs_initial_plan = False
+
+            self.planner.refine(
+                current_velocity=odom_g.twist.twist.linear.x,
+                current_omega=odom_g.twist.twist.angular.z,
+            )
+
+            performance.update("Planner refinement")
+
+            trajectory = self.planner.get_trajectory()
+
+            with self.data_lock:
+                latest_odom_after = self.latest_odom
+
+            if latest_odom_after and trajectory is not None and len(trajectory) > 0:
+                o2 = latest_odom_after.pose.pose.orientation
+                x2 = latest_odom_after.pose.pose.position.x
+                y2 = latest_odom_after.pose.pose.position.y
+                yaw2 = quat_to_yaw(o2.x, o2.y, o2.z, o2.w)
+
+                if robot_pose.x != x2 or robot_pose.y != y2 or robot_pose.theta != yaw2:
+                    delta = get_odom_delta(latest_odom_after, odom_g)
+                    self.planner.transform_trajectory(delta.dx, delta.dy, delta.dtheta)
+                    trajectory = self.planner.get_trajectory()
+                    self.last_processed_odom = latest_odom_after
+                    robot_pose = Pose2D(x2, y2, yaw2)
+
+            v, omega = trajectory_to_action(trajectory)
+            self._publish_velocity(v, omega)
+
+            performance.update("Publish/Finish")
+
             self._publish_robot_pose(robot_pose)
-            self._publish_velocity(0.0, 0.0)
-            performance["Total"] = round((time.perf_counter() - start_time) * 1000, 2)
-            self.get_logger().debug(
-                f"Idle - Performance:\n{json.dumps(performance, indent=4)}",
-                throttle_duration_sec=5.0,
-            )
-            return
-
-        if self.use_gps and not self.first_gps:
-            self.get_logger().warn(
-                "Waiting for GPS anchor...", throttle_duration_sec=2.0
-            )
-            return
-
-        self.path_manager.generate_path(gps_data, robot_pose.x, robot_pose.y)
-
-        if self.path_manager.check_goal_reached(robot_pose.x, robot_pose.y):
-            self._publish_velocity(0.0, 0.0)
-            self._publish_status("goal_reached")
-            return
-
-        local_path_snapshot = self.path_manager.get_local_path_snapshot()
-        selection = self.goal_selector.select_local_goal(
-            path=local_path_snapshot,
-            start_index=self.path_manager.get_current_index(),
-            vehicle_x=robot_pose.x,
-            vehicle_y=robot_pose.y,
-            yaw=robot_pose.theta,
-            detected_obstacles=detected_obstacles,
-        )
-        t3 = time.perf_counter()
-        performance["Goal update"] = round((t3 - t2) * 1000, 2)
-
-        if selection is None:
-            self._publish_velocity(0.0, 0.0)
-            return
-
-        local_goal, new_closest_idx = selection
-        self.path_manager.update_current_index(new_closest_idx)
-
-        self.planner.move_goal(local_goal, (0.0,))
-        if self.needs_initial_plan:
-            self.planner.plan()
-            self.needs_initial_plan = False
-
-        self.planner.refine(
-            current_velocity=odom_g.twist.twist.linear.x,
-            current_omega=odom_g.twist.twist.angular.z,
-        )
-
-        t4 = time.perf_counter()
-        performance["Planner refinement"] = round((t4 - t3) * 1000, 2)
-
-        trajectory = self.planner.get_trajectory()
-
-        with self.data_lock:
-            latest_odom_after = self.latest_odom
-
-        if latest_odom_after and trajectory is not None and len(trajectory) > 0:
-            o2 = latest_odom_after.pose.pose.orientation
-            x2 = latest_odom_after.pose.pose.position.x
-            y2 = latest_odom_after.pose.pose.position.y
-            yaw2 = quat_to_yaw(o2.x, o2.y, o2.z, o2.w)
-
-            if robot_pose.x != x2 or robot_pose.y != y2 or robot_pose.theta != yaw2:
-                delta = get_odom_delta(latest_odom_after, odom_g)
-                self.planner.transform_trajectory(delta.dx, delta.dy, delta.dtheta)
-                trajectory = self.planner.get_trajectory()
-                self.last_processed_odom = latest_odom_after
-                robot_pose = Pose2D(x2, y2, yaw2)
-
-        v, omega = trajectory_to_action(trajectory)
-        self._publish_velocity(v, omega)
-
-        t5 = time.perf_counter()
-        performance["Publish/Finish"] = round((t5 - t4) * 1000, 2)
-        performance["Total"] = round((t5 - start_time) * 1000, 2)
-
-        self.get_logger().debug(
-            f"Performance:\n{json.dumps(performance, indent=4)}",
-            throttle_duration_sec=2.0,
-        )
-
-        self._publish_robot_pose(robot_pose)
-        self._publish_trajectory(trajectory)
-        self._publish_goal_local([local_goal[0], local_goal[1], 0.0])
+            self._publish_trajectory(trajectory)
+            self._publish_goal_local([local_goal[0], local_goal[1], 0.0])
 
     def _log_missing_sensors(
         self,

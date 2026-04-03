@@ -414,17 +414,18 @@ class ControllerNode(Node):
                 return
 
             local_goal, new_closest_idx, target_idx = selection
-            corridor_line_obstacles = self.goal_selector.generate_corridor_barriers(
-                path=local_path_snapshot,
-                closest_idx=new_closest_idx,
-                target_idx=target_idx,
-                vehicle_x=robot_pose.x,
-                vehicle_y=robot_pose.y,
-                yaw=robot_pose.theta,
-                barrier_offset=BARRIER_OFFSET,
-            )
-            detected_obstacles.extend(corridor_line_obstacles[0])
-            detected_obstacles.extend(corridor_line_obstacles[1])
+            if self.use_gps:
+                corridor_line_obstacles = self.goal_selector.generate_corridor_barriers(
+                    path=local_path_snapshot,
+                    closest_idx=new_closest_idx,
+                    target_idx=target_idx,
+                    vehicle_x=robot_pose.x,
+                    vehicle_y=robot_pose.y,
+                    yaw=robot_pose.theta,
+                    barrier_offset=BARRIER_OFFSET,
+                )
+                detected_obstacles.extend(corridor_line_obstacles[0])
+                detected_obstacles.extend(corridor_line_obstacles[1])
 
             self._publish_obstacles(detected_obstacles)
             self.path_manager.update_current_index(new_closest_idx)

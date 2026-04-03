@@ -105,12 +105,7 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
         weights = exp_d / sum_exp
         w1, w2, w3, w4 = weights[0], weights[1], weights[2], weights[3]
 
-        intersect = segments_intersect(
-            A_x, A_y, B_x, B_y, self.C_x, self.C_y, self.D_x, self.D_y
-        )
-        sign_mask = np.where(intersect, -1.0, 1.0)
-
-        errors = self.safety_radius - sign_mask * d_min
+        errors = self.safety_radius - d_min
         active_mask = errors > 0.0
         residuals[:] = np.where(active_mask, self.weight * errors, 0.0)
 
@@ -119,7 +114,6 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
             inv_d2 = 1.0 / np.maximum(d2, 1e-8)
             inv_d3 = 1.0 / np.maximum(d3, 1e-8)
             inv_d4 = 1.0 / np.maximum(d4, 1e-8)
-            z = np.zeros(self.n_obstacles)
 
             gA_x_min = (
                 w1 * u1_x * inv_d1
@@ -142,7 +136,7 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
                 + w4 * (-t4 * u4_y * inv_d4)
             )
 
-            j_scaler = np.where(active_mask, self.weight * (-sign_mask), 0.0)
+            j_scaler = np.where(active_mask, -self.weight, 0.0)
 
             if jacobians[0] is not None:
                 jacobians[0][:] = np.vstack(
@@ -153,6 +147,7 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
                     (j_scaler * gB_x_min, j_scaler * gB_y_min)
                 ).T.ravel()
 
+        return True
         return True
 
 

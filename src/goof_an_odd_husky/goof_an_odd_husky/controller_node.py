@@ -379,12 +379,14 @@ class ControllerNode(Node):
             performance.update("Obstacle processing")
 
             if detected_obstacles is None:
+                self.get_logger().warn("Obstacle detection failed", throttle_duration_sec=2.0)
                 self._publish_velocity(0.0, 0.0)
                 return
 
             self._publish_obstacles(detected_obstacles)
 
             if not self.path_manager.has_goal():
+                self.get_logger().debug("Waiting for a goal...", throttle_duration_sec=2.0)
                 self._publish_robot_pose(robot_pose)
                 self._publish_velocity(0.0, 0.0)
                 return
@@ -396,6 +398,7 @@ class ControllerNode(Node):
             self.path_manager.generate_path(gps_data, robot_pose.x, robot_pose.y)
 
             if self.path_manager.check_goal_reached(robot_pose.x, robot_pose.y):
+                self.get_logger().info("Goal reached!", throttle_duration_sec=2.0)
                 self._publish_velocity(0.0, 0.0)
                 self._publish_status("goal_reached")
                 return
@@ -412,6 +415,7 @@ class ControllerNode(Node):
             performance.update("Goal update")
 
             if selection is None:
+                self.get_logger().error("No local goal could be selected", throttle_duration_sec=2.0)
                 self._publish_velocity(0.0, 0.0)
                 return
 

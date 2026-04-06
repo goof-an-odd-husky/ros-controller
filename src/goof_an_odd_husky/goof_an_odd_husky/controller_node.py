@@ -382,6 +382,8 @@ class ControllerNode(Node):
                 self._publish_velocity(0.0, 0.0)
                 return
 
+            self._publish_obstacles(detected_obstacles)
+
             if not self.path_manager.has_goal():
                 self._publish_robot_pose(robot_pose)
                 self._publish_velocity(0.0, 0.0)

@@ -1,20 +1,20 @@
-USE_GPS: bool = True
+USE_GPS: bool = False
 DEBUG: bool = True
 
-SIM: bool = True
+SIM: bool = False
 if SIM:
     TOPICS: dict[str, str] = {
         "cmd_vel": "/husky/cmd_vel",
         "scan": "/husky/sensors/lidar2d_0/scan",
         "gps": "/husky/sensors/gps_0/fix",
-        "odom": "/husky/odometry/global",
+        "odom": "/husky/odom/global",
     }
 else:
     TOPICS: dict[str, str] = {
         "cmd_vel": "/platform/cmd_vel",
         "scan": "/scan",
         "gps": "/todo",
-        "odom": "/odometry/filtered",
+        "odom": "/platform/odometry/filtered",
     }
 
 HEARTBEAT_TIMEOUT_SEC: float = 5.0

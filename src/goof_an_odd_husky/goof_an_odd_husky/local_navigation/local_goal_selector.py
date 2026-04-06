@@ -151,7 +151,7 @@ class LocalGoalSelector:
                         break
 
                 idx_behind = target_idx - offset
-                if idx_behind >= closest_idx:
+                if idx_behind >= closest_idx and idx_behind > 0:
                     lx, ly = self._transform_point_to_local(
                         path[idx_behind][0],
                         path[idx_behind][1],

@@ -132,6 +132,7 @@ class ObstaclePipeline:
         cluster_break_distance: Gap threshold in meters to slice scans into clusters.
         geometry_split_threshold: Threshold to decide whether to map a cluster as a Line or Circle.
         step: Ray skipping frequency to optimize computational overhead.
+        min_range: Minimum range in meters; points closer than this are discarded.
         circle_extractor: Instance of CircleExtractor.
         line_extractor: Instance of LineExtractor.
     """
@@ -139,6 +140,7 @@ class ObstaclePipeline:
     cluster_break_distance: float
     geometry_split_threshold: float
     step: int
+    min_range: float
     circle_extractor: CircleExtractor
     line_extractor: LineExtractor
 
@@ -147,6 +149,7 @@ class ObstaclePipeline:
         cluster_break_distance: float = 1.5,
         geometry_split_threshold: float = 1.5,
         step: int = 1,
+        min_range: float = 0.07,
     ):
         """Initialize pipeline parameters.
 
@@ -154,10 +157,12 @@ class ObstaclePipeline:
             cluster_break_distance: Points farther apart than this start a new cluster.
             geometry_split_threshold: Clusters larger than this are fitted as lines.
             step: Lidar downsampling rate.
+            min_range: Minimum distance from sensor; points closer than this value (in meters) are filtered out.
         """
         self.cluster_break_distance = cluster_break_distance
         self.geometry_split_threshold = geometry_split_threshold
         self.step = step
+        self.min_range = min_range
         self.circle_extractor = CircleExtractor()
         self.line_extractor = LineExtractor()
 
@@ -201,7 +206,7 @@ class ObstaclePipeline:
             ranges = ranges[:: self.step]
             angles = angles[:: self.step]
 
-        valid = np.isfinite(ranges)
+        valid = np.isfinite(ranges) & (ranges >= self.min_range)
         return np.column_stack(
             (
                 ranges[valid] * np.cos(angles[valid]),
@@ -335,3 +340,4 @@ class ObstacleFilter:
         mask = intersect | (min_dist <= (self.safety_radius + 0.1))
 
         return [obs for i, obs in enumerate(self.line_obstacles) if mask[i]]
+

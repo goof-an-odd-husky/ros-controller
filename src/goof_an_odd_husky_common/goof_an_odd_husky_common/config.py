@@ -14,7 +14,7 @@ else:
         "cmd_vel": "/platform/cmd_vel",
         "scan": "/scan",
         "gps": "/todo",
-        "odom": "/platform/odometry/filtered",
+        "odom": "/platform/odom/filtered",
     }
 
 HEARTBEAT_TIMEOUT_SEC: float = 5.0

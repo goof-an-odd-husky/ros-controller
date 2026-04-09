@@ -78,10 +78,10 @@ class TEBPlanner(TrajectoryPlanner):
         self,
         start_pose: NDArray[np.floating] | list[float],
         goal_pose: NDArray[np.floating] | list[float],
-        max_v: float,
-        max_a: float,
-        initial_step: float = 3.0,
-        safety_radius: float = 2.0,
+        max_v: float = 0.25,
+        max_a: float = 0.1,
+        initial_step: float = 1.0,
+        safety_radius: float = 1.0,
     ) -> None:
         """Initializes the TEBPlanner.
 
@@ -312,7 +312,7 @@ class TEBPlanner(TrajectoryPlanner):
         if not self.traj:
             return False
 
-        self.resize_trajectory(1, 6)
+        self.resize_trajectory(0.4, 6)
 
         if len(self.traj) <= 2:
             return False
@@ -326,27 +326,27 @@ class TEBPlanner(TrajectoryPlanner):
         start_vx = current_velocity * np.cos(start_theta).item()
         start_vy = current_velocity * np.sin(start_theta).item()
 
-        velocity_cost = SegmentVelocityCost(weight=10.0, max_v=self.max_v)
+        velocity_cost = SegmentVelocityCost(weight=250.0, max_v=self.max_v)
         angular_velocity_cost = SegmentAngularVelocityCost(
-            weight=10.0, max_omega=self.max_v / 2
+            weight=90.0, max_omega=self.max_v / 2
         )
-        acceleration_cost = SegmentAccelerationCost(weight=10.0, max_a=self.max_a)
+        acceleration_cost = SegmentAccelerationCost(weight=90.0, max_a=self.max_a)
         angular_acceleration_cost = SegmentAngularAccelerationCost(
-            weight=10.0, max_alpha=self.max_a / 3
+            weight=50.0, max_alpha=self.max_a / 3
         )
         start_acceleration_cost = StartAccelerationCost(
-            weight=10.0, max_a=self.max_a, current_v=(start_vx, start_vy)
+            weight=90.0, max_a=self.max_a, current_v=(start_vx, start_vy)
         )
         start_angular_acceleration_cost = StartAngularAccelerationCost(
-            weight=10.0, max_alpha=self.max_a / 3, current_omega=current_omega
+            weight=50.0, max_alpha=self.max_a / 3, current_omega=current_omega
         )
-        kinematic_cost = SegmentKinematicsCost(weight=7.0)
-        heading_cost = SegmentHeadingCost(weight=25.0)
-        angular_smoothing_cost = SegmentAngularSmoothingCost(weight=1.0)
-        time_cost = SegmentTimeCost(weight=10.0)
+        kinematic_cost = SegmentKinematicsCost(weight=9.0)
+        heading_cost = SegmentHeadingCost(weight=40.0)
+        angular_smoothing_cost = SegmentAngularSmoothingCost(weight=4.0)
+        time_cost = SegmentTimeCost(weight=1.0)
 
         obstacle_filter = ObstacleFilter(
-            circle_obstacles, line_obstacles, self.safety_radius * 2.5
+            circle_obstacles, line_obstacles, self.safety_radius * 3.0
         )
 
         n_points = len(self.traj)
@@ -364,7 +364,7 @@ class TEBPlanner(TrajectoryPlanner):
             if close_circles:
                 problem.add_residual_block(
                     SegmentCircleObstaclesCost(
-                        close_circles, weight=50.0, safety_radius=self.safety_radius
+                        close_circles, weight=200.0, safety_radius=self.safety_radius
                     ),
                     None,
                     [xy_curr, xy_next],
@@ -376,7 +376,7 @@ class TEBPlanner(TrajectoryPlanner):
             if close_lines:
                 problem.add_residual_block(
                     SegmentLineObstaclesCost(
-                        close_lines, weight=50.0, safety_radius=self.safety_radius
+                        close_lines, weight=200.0, safety_radius=self.safety_radius
                     ),
                     None,
                     [xy_curr, xy_next],

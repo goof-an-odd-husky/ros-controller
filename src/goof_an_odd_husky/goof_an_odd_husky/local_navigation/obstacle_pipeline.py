@@ -149,7 +149,7 @@ class ObstaclePipeline:
         cluster_break_distance: float = 1.5,
         geometry_split_threshold: float = 1.5,
         step: int = 1,
-        min_range: float = 0.07,
+        min_range: float = 0.32,
     ):
         """Initialize pipeline parameters.
 
@@ -166,16 +166,17 @@ class ObstaclePipeline:
         self.circle_extractor = CircleExtractor()
         self.line_extractor = LineExtractor()
 
-    def process(self, scan_msg: LaserScan) -> list[Obstacle]:
+    def process(self, scan_msg: LaserScan, is_sim: bool = True) -> list[Obstacle]:
         """Convert a raw LaserScan message into a list of geometric obstacles.
 
         Args:
             scan_msg: Incoming LaserScan.
+            is_sim: Whether the data comes from a simulator.
 
         Returns:
             list[Obstacle]: A collection of extracted Obstacle objects.
         """
-        points = self._scan_to_cartesian(scan_msg)
+        points = self._scan_to_cartesian(scan_msg, not is_sim)
         if len(points) == 0:
             return []
 
@@ -198,8 +199,10 @@ class ObstaclePipeline:
             self.circle_extractor.extract(circle_clusters) if circle_clusters else []
         ) + (self.line_extractor.extract(line_clusters) if line_clusters else [])
 
-    def _scan_to_cartesian(self, scan_msg: LaserScan) -> NDArray[np.floating]:
+    def _scan_to_cartesian(self, scan_msg: LaserScan, invert: bool = False) -> NDArray[np.floating]:
         ranges = np.array(scan_msg.ranges)
+        if invert:
+            ranges = ranges[::-1]
         angles = scan_msg.angle_min + np.arange(len(ranges)) * scan_msg.angle_increment
 
         if self.step > 1:

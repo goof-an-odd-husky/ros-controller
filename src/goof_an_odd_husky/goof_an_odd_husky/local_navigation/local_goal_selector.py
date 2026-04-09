@@ -103,34 +103,39 @@ class LocalGoalSelector:
             return None
 
         min_dist = float("inf")
-        closest_idx = max(start_index - 3, 0)
+        search_window_start = max(start_index - 3, 0)
         search_window_end = min(len(path), start_index + 8)
+        closest_idx = search_window_start
 
-        for i in range(start_index, search_window_end):
+        for i in range(search_window_start, search_window_end):
             px, py = path[i]
             dist = math.hypot(px - vehicle_x, py - vehicle_y)
             if dist < min_dist:
                 min_dist = dist
                 closest_idx = i
 
-        target_idx = closest_idx
-        for i in range(closest_idx, len(path)):
-            px, py = path[i]
-            dist_from_robot = math.hypot(px - vehicle_x, py - vehicle_y)
-            if dist_from_robot >= self.max_trajectory_distance:
-                target_idx = i
+        accumulated_dist = 0.0
+
+        for i in range(closest_idx, len(path) - 1):
+            px1, py1 = path[i]
+            px2, py2 = path[i + 1]
+            segment_dist = math.hypot(px2 - px1, py2 - py1)
+            accumulated_dist += segment_dist
+
+            if accumulated_dist >= self.max_trajectory_distance:
+                target_idx = i + 1
                 break
         else:
             target_idx = len(path) - 1
-
-        if target_idx < 0 or target_idx >= len(path):
-            return None
 
         local_x, local_y = self._transform_point_to_local(
             path[target_idx][0], path[target_idx][1], vehicle_x, vehicle_y, yaw
         )
 
-        if not is_point_safe(local_x, local_y, detected_obstacles, margin=2.0):
+        MIN_SAFE_MARGIN = 0.4
+        if not is_point_safe(
+            local_x, local_y, detected_obstacles, margin=MIN_SAFE_MARGIN
+        ):
             max_search_offset = 8
             found_safe = False
 
@@ -144,40 +149,53 @@ class LocalGoalSelector:
                         vehicle_y,
                         yaw,
                     )
-                    if is_point_safe(lx, ly, detected_obstacles, margin=0.4):
+                    if is_point_safe(
+                        lx, ly, detected_obstacles, margin=MIN_SAFE_MARGIN
+                    ):
                         target_idx = idx_ahead
                         local_x, local_y = lx, ly
                         found_safe = True
                         break
 
-                idx_behind = target_idx - offset
-                if idx_behind >= closest_idx and idx_behind > 0:
-                    lx, ly = self._transform_point_to_local(
-                        path[idx_behind][0],
-                        path[idx_behind][1],
-                        vehicle_x,
-                        vehicle_y,
-                        yaw,
-                    )
-                    if is_point_safe(lx, ly, detected_obstacles, margin=0.4):
-                        target_idx = idx_behind
-                        local_x, local_y = lx, ly
-                        found_safe = True
-                        break
+            if not found_safe:
+                for offset in range(1, max_search_offset + 1):
+                    idx_behind = target_idx - offset
+                    if idx_behind >= closest_idx and idx_behind >= 0:
+                        lx, ly = self._transform_point_to_local(
+                            path[idx_behind][0],
+                            path[idx_behind][1],
+                            vehicle_x,
+                            vehicle_y,
+                            yaw,
+                        )
+                        if is_point_safe(
+                            lx, ly, detected_obstacles, margin=MIN_SAFE_MARGIN
+                        ):
+                            target_idx = idx_behind
+                            local_x, local_y = lx, ly
+                            found_safe = True
+                            break
 
             if not found_safe:
                 self.logger.debug(
-                    "Could not slide target point out of obstacle. Reverting to closest node.",
-                    throttle_duration_sec=2.0,
+                    "Could not slide target point out of obstacle. Checking closest node.",
+                    throttle_duration_sec=1.0,
                 )
-                local_x, local_y = self._transform_point_to_local(
+                lx_closest, ly_closest = self._transform_point_to_local(
                     path[closest_idx][0],
                     path[closest_idx][1],
                     vehicle_x,
                     vehicle_y,
                     yaw,
                 )
-                target_idx = closest_idx
+                if is_point_safe(
+                    lx_closest, ly_closest, detected_obstacles, margin=MIN_SAFE_MARGIN
+                ):
+                    local_x, local_y = lx_closest, ly_closest
+                    target_idx = closest_idx
+                else:
+                    self.logger.error("Even the closest point is blocked. Stopping.")
+                    return None
 
         return (local_x, local_y), closest_idx, target_idx
 

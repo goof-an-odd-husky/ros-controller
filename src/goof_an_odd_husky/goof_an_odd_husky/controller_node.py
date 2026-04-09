@@ -19,6 +19,7 @@ from goof_an_odd_husky_common.config import (
     HEARTBEAT_TIMEOUT_SEC,
     USE_GPS,
     DEBUG,
+    SIM,
 )
 from goof_an_odd_husky_common.helpers import (
     quat_to_yaw,
@@ -238,7 +239,7 @@ class ControllerNode(Node):
 
         self.initial_start = [0.0, 0.0, 0.0]
         self.initial_goal = [0.0, 0.0, 0.0]
-        self.planner = TEBPlanner(self.initial_start, self.initial_goal, 1, 2)
+        self.planner = TEBPlanner(self.initial_start, self.initial_goal)
         self.needs_initial_plan = False
 
         self.path_manager = GlobalPathManager(
@@ -270,7 +271,7 @@ class ControllerNode(Node):
         """
         self.path_manager.set_goal(GpsCoord(msg.pose.position.x, msg.pose.position.y))
         with self.data_lock:
-            self.planner = TEBPlanner(self.initial_start, self.initial_goal, 1, 2)
+            self.planner = TEBPlanner(self.initial_start, self.initial_goal)
             self.needs_initial_plan = True
 
         self._publish_status("navigating")
@@ -546,7 +547,7 @@ class ControllerNode(Node):
         if (self.get_clock().now() - scan_time).nanoseconds / 1e9 > 1.0:
             self.get_logger().error("Lidar data stale", throttle_duration_sec=1.0)
             return None
-        obstacles = self.obstacle_pipeline.process(scan)
+        obstacles = self.obstacle_pipeline.process(scan, SIM)
         self.planner.update_obstacles(obstacles)
         return obstacles
 

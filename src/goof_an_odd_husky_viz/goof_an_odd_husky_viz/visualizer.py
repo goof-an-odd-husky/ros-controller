@@ -547,3 +547,27 @@ class TrajectoryVisualizer:
             if dists[idx] < 1.0:
                 self.obstacles.pop(idx)
                 self._redraw_obstacles()
+
+
+class DummyVisualizer:
+    def __init__(self, *args, **kwargs):
+        self.on_goal_set = kwargs.get("on_goal_set", None)
+        self.is_open = True
+        self._goal_sent = False
+        
+        print("[DummyVisualizer] Initialized. GUI rendering is DISABLED.")
+
+    def set_start_goal(self, start, goal):
+        pass
+
+    def update_world_state(self, robot_pose, trajectory, obstacles, start_goal):
+        pass
+
+    def draw(self):
+        if not self._goal_sent and self.on_goal_set is not None:
+            target_x = 2.39
+            target_y = 7.67
+            print(f"[DummyVisualizer] Simulating user click -> Setting goal to X={target_x}m, Y={target_y}m")
+            
+            self.on_goal_set(target_x, target_y)
+            self._goal_sent = True

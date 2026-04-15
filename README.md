@@ -14,7 +14,7 @@ Start: `./start.sh <path-to-husky-sim>` or `./start.sh` (if cloned into `../husk
 
 Then `docker exec -ti husky_dev bash`
 
-After starting the container for the first time run `./init.sh` and `./build.sh` from `/workspace/husky-sim`, then run `./init_docker.sh` and `./build.sh` from `/workspace/goof-an-odd-husky`
+After starting the container for the first time run `./init.sh` from `/workspace/husky-sim`, then run `./init_docker.sh` and `./build.sh` from `/workspace/goof-an-odd-husky`
 
 Relaunch the shell
 

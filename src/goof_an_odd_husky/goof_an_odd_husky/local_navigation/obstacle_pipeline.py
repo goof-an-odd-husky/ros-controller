@@ -189,7 +189,25 @@ class LineExtractor(ObstacleExtractor):
 
 
 class ObstaclePipeline:
-    """End-to-end pipeline processing raw LaserScans into geometric primitives."""
+    """End-to-end pipeline processing raw LaserScans into geometric primitives.
+
+    Attributes:
+        cluster_break_distance: Gap threshold in meters to slice scans into clusters.
+        geometry_split_threshold: Threshold to decide whether to map a cluster as a Line or Circle.
+        step: Ray skipping frequency to optimize computational overhead.
+        min_range: Minimum range in meters; points closer than this are discarded.
+        median_filter_size: The window size for median filter run on a scan.
+        circle_extractor: Instance of CircleExtractor.
+        line_extractor: Instance of LineExtractor.
+    """
+
+    cluster_break_distance: float
+    geometry_split_threshold: float
+    step: int
+    min_range: float
+    circle_extractor: CircleExtractor
+    line_extractor: LineExtractor
+    median_filter_size: int
 
     def __init__(
         self,
@@ -199,6 +217,15 @@ class ObstaclePipeline:
         min_range: float = 0.32,
         median_filter_size: int = 3,
     ):
+        """Initialize pipeline parameters.
+
+        Args:
+            cluster_break_distance: Points farther apart than this start a new cluster.
+            geometry_split_threshold: Clusters larger than this are fitted as lines.
+            step: Lidar downsampling rate.
+            min_range: Minimum distance from sensor; points closer than this value (in meters) are filtered out.
+            median_filter_size: The window size for median filter run on a scan.
+        """
         self.cluster_break_distance = cluster_break_distance
         self.geometry_split_threshold = geometry_split_threshold
         self.step = step

@@ -1,13 +1,13 @@
 USE_GPS: bool = False
 DEBUG: bool = True
 
-SIM: bool = False
+SIM: bool = True
 if SIM:
     TOPICS: dict[str, str] = {
         "cmd_vel": "/husky/cmd_vel",
         "scan": "/husky/sensors/lidar2d_0/scan",
         "gps": "/husky/sensors/gps_0/fix",
-        "odom": "/husky/odom/global",
+        "odom": "/husky/odometry/global",
     }
 else:
     TOPICS: dict[str, str] = {

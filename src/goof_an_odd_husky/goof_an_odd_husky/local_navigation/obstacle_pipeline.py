@@ -67,9 +67,9 @@ class CircleExtractor(ObstacleExtractor):
                     )
                 )
                 continue
-            if n_points == 2:
-                obstacles.append(self._fallback_chord_width(cluster))
-                continue
+            # if n_points == 2:
+            obstacles.append(self._fallback_chord_width(cluster))
+            continue # TODO: try this algorithm, not fallback
 
             p1 = cluster[0]
             p3 = cluster[-1]
@@ -214,7 +214,7 @@ class ObstaclePipeline:
         cluster_break_distance: float = 1.5,
         geometry_split_threshold: float = 2,
         step: int = 1,
-        min_range: float = 0.32,
+        min_range: float = 0.33,
         median_filter_size: int = 3,
     ):
         """Initialize pipeline parameters.
@@ -273,7 +273,7 @@ class ObstaclePipeline:
             )
             arc_depth = abs(cross_prod) / chord_len
 
-            if 0.15 * chord_len < arc_depth < 0.7 * chord_len:
+            if 0.1 * chord_len < arc_depth < 0.65 * chord_len:
                 circle_clusters.append(cluster)
             else:
                 line_clusters.append(cluster)

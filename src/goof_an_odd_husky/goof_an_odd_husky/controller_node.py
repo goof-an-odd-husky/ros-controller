@@ -245,9 +245,7 @@ class ControllerNode(Node):
         self.goal_selector = LocalGoalSelector(
             max_trajectory_distance=MAX_TRAJECTORY_DISTANCE, logger=self.get_logger()
         )
-        self.obstacle_pipeline = ObstaclePipeline(
-            cluster_break_distance=2, geometry_split_threshold=3
-        )
+        self.obstacle_pipeline = ObstaclePipeline()
 
         self._publish_status("idle")
 

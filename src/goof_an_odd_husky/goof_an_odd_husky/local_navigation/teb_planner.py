@@ -312,7 +312,7 @@ class TEBPlanner(TrajectoryPlanner):
         if not self.traj:
             return False
 
-        self.resize_trajectory(0.4, 6)
+        self.resize_trajectory(0.4, 2)
 
         if len(self.traj) <= 2:
             return False
@@ -340,10 +340,10 @@ class TEBPlanner(TrajectoryPlanner):
         start_angular_acceleration_cost = StartAngularAccelerationCost(
             weight=50.0, max_alpha=self.max_a / 3, current_omega=current_omega
         )
-        kinematic_cost = SegmentKinematicsCost(weight=9.0)
-        heading_cost = SegmentHeadingCost(weight=40.0)
-        angular_smoothing_cost = SegmentAngularSmoothingCost(weight=4.0)
-        time_cost = SegmentTimeCost(weight=1.0)
+        kinematic_cost = SegmentKinematicsCost(weight=20.0)
+        heading_cost = SegmentHeadingCost(weight=5.0)
+        angular_smoothing_cost = SegmentAngularSmoothingCost(weight=1.0)
+        time_cost = SegmentTimeCost(weight=5.0)
 
         obstacle_filter = ObstacleFilter(
             circle_obstacles, line_obstacles, self.safety_radius * 3.0
@@ -417,9 +417,9 @@ class TEBPlanner(TrajectoryPlanner):
                 kinematic_cost, None, [xy_curr, theta_curr, xy_next, theta_next]
             )
             problem.add_residual_block(time_cost, None, [dt])
-            problem.add_residual_block(
-                heading_cost, None, [xy_curr, theta_curr, xy_next]
-            )
+            # problem.add_residual_block(
+            #     heading_cost, None, [xy_curr, theta_curr, xy_next]
+            # ) # Don't penalize reverse. TODO: check, whether necessary
             problem.add_residual_block(
                 angular_smoothing_cost, None, [theta_curr, theta_next, dt]
             )
@@ -429,7 +429,7 @@ class TEBPlanner(TrajectoryPlanner):
         problem.set_parameter_block_constant(self.traj.xy[0])
         problem.set_parameter_block_constant(self.traj.xy[-1])
         problem.set_parameter_block_constant(self.traj.theta[0])
-        problem.set_parameter_block_constant(self.traj.theta[-1])
+        # problem.set_parameter_block_constant(self.traj.theta[-1]) # We don't need the exact heading
 
         options = pyceres.SolverOptions()
         options.max_num_iterations = iterations

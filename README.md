@@ -24,6 +24,8 @@ To stop the container run `docker stop husky_dev` and `docker rm husky_dev`
 
 Run `./init_husky.sh` and `./build.sh`
 
+Run `ros2 launch ekf_launch.py`
+
 # Launch
 
 Then either:

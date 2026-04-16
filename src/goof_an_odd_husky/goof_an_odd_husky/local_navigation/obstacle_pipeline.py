@@ -211,7 +211,7 @@ class ObstaclePipeline:
 
     def __init__(
         self,
-        cluster_break_distance: float = 1.8,
+        cluster_break_distance: float = 1.5,
         geometry_split_threshold: float = 2,
         step: int = 1,
         min_range: float = 0.32,

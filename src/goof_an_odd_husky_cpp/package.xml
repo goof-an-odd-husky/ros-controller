@@ -1,0 +1,15 @@
+<package format="3">
+  <name>goof_an_odd_husky_cpp</name>
+  <version>0.1.0</version>
+  <description>A husky controller to avoid obstacles; C++ bindings</description>
+  <maintainer email="h.radomyr@proton.me">Radomyr Husiev</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <build_depend>pybind11</build_depend>
+  <build_depend>ceres-solver</build_depend>
+
+  <exec_depend>ceres-solver</exec_depend>
+
+</package>

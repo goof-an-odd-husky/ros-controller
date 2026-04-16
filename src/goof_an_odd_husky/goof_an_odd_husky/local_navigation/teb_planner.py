@@ -78,8 +78,8 @@ class TEBPlanner(TrajectoryPlanner):
         self,
         start_pose: NDArray[np.floating] | list[float],
         goal_pose: NDArray[np.floating] | list[float],
-        max_v: float = 0.25,
-        max_a: float = 0.1,
+        max_v: float = 0.5,
+        max_a: float = 0.05,
         initial_step: float = 1.0,
         safety_radius: float = 1.0,
     ) -> None:

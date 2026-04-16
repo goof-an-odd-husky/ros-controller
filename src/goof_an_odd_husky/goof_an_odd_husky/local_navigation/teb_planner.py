@@ -436,8 +436,8 @@ class TEBPlanner(TrajectoryPlanner):
         options.function_tolerance = 1e-4
         options.gradient_tolerance = 1e-4
         options.parameter_tolerance = 1e-4
-        options.num_threads = 6
-        options.linear_solver_type = pyceres.LinearSolverType.SPARSE_NORMAL_CHOLESKY
+        options.num_threads = 1
+        options.linear_solver_type = pyceres.LinearSolverType.DENSE_NORMAL_CHOLESKY
         options.minimizer_progress_to_stdout = False
 
         summary = pyceres.SolverSummary()

@@ -9,7 +9,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped, PointStamped
-from std_msgs.msg import String, Empty
+from std_msgs.msg import String, Empty, Header
 
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore
@@ -91,7 +91,7 @@ class VisualizerNode(Node):
         self.goal_publisher = self.create_publisher(
             PoseStamped, "/nav/goal", LATCHED_QOS
         )
-        self.cancel_publisher = self.create_publisher(Empty, "/nav/cancel", 10)
+        self.cancel_publisher = self.create_publisher(Header, "/nav/cancel", LATCHED_QOS)
         self.heartbeat_publisher = self.create_publisher(Empty, "/viz/heartbeat", 10)
 
         self.heartbeat_timer = self.create_timer(1.0, self._publish_heartbeat)
@@ -118,7 +118,9 @@ class VisualizerNode(Node):
         self.goal_publisher.publish(msg)
 
     def _on_cancel_pressed(self) -> None:
-        self.cancel_publisher.publish(Empty())
+        msg = Header()
+        msg.stamp = self.get_clock().now().to_msg()
+        self.cancel_publisher.publish(msg)
 
     def _on_pose(self, msg: PoseStamped) -> None:
         yaw = quat_to_yaw(

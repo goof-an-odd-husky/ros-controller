@@ -10,7 +10,7 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from sensor_msgs.msg import LaserScan, NavSatFix
 from nav_msgs.msg import Odometry, Path
 from geometry_msgs.msg import TwistStamped, PoseStamped, PointStamped
-from std_msgs.msg import String, Empty
+from std_msgs.msg import String, Empty, Header
 
 from goof_an_odd_husky_common.config import (
     TOPICS,
@@ -193,10 +193,7 @@ class ControllerNode(Node):
             callback_group=self.nav_cmd_cb_group,
         )
         self.cancel_subscription = self.create_subscription(
-            Empty,
-            "/nav/cancel",
-            self.cancel_callback,
-            10,
+            Header, "/nav/cancel", self.cancel_callback, LATCHED_QOS,
             callback_group=self.nav_cmd_cb_group,
         )
         self.heartbeat_subscription = self.create_subscription(
@@ -269,6 +266,7 @@ class ControllerNode(Node):
         Args:
             msg: The PoseStamped message containing the new goal.
         """
+        self.last_goal_stamp = msg.header.stamp
         self.path_manager.set_goal(GpsCoord(msg.pose.position.x, msg.pose.position.y))
         with self.data_lock:
             self.planner = TEBPlanner(self.initial_start, self.initial_goal)
@@ -279,12 +277,24 @@ class ControllerNode(Node):
             f"New goal set: {msg.pose.position.x}, {msg.pose.position.y}"
         )
 
-    def cancel_callback(self, _: Empty) -> None:
+    def cancel_callback(self, msg: Header) -> None:
         """Callback for cancelling the current navigation goal.
 
+        Compares the cancel timestamp against the last received goal timestamp
+        to ensure stale cancels from a latched topic do not suppress newer goals.
+        Stops the robot and clears the path only if the cancel is more recent.
+
         Args:
-            _: Empty message payload.
+            msg: Header carrying the timestamp of the cancel request.
         """
+        last_goal = getattr(self, "last_goal_stamp", None)
+        cancel_is_newer = (
+            last_goal is None
+            or rclpy.time.Time.from_msg(msg.stamp)
+               > rclpy.time.Time.from_msg(last_goal)
+        )
+        if not cancel_is_newer:
+            return
         self.path_manager.cancel_goal()
         with self.data_lock:
             self.needs_initial_plan = False

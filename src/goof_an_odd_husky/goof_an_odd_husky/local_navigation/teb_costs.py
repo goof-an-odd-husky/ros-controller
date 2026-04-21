@@ -38,7 +38,7 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
         line_obstacles: list[LineObstacle],
         weight: float,
         safety_radius: float,
-        softmin_alpha: float = -7.0,
+        softmin_alpha: float,
     ) -> None:
         """Initialize the SegmentLineObstaclesCost.
 

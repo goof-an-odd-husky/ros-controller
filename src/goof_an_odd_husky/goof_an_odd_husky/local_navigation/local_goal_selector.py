@@ -4,6 +4,7 @@ import numpy as np
 from rclpy.impl.rcutils_logger import RcutilsLogger
 from goof_an_odd_husky.local_navigation.safety import is_point_safe
 from goof_an_odd_husky_common.obstacles import Obstacle, LineObstacle
+from goof_an_odd_husky_common.config import SAFETY_RADIUS
 from shapely.geometry import LineString, Point
 
 
@@ -132,9 +133,8 @@ class LocalGoalSelector:
             path[target_idx][0], path[target_idx][1], vehicle_x, vehicle_y, yaw
         )
 
-        MIN_SAFE_MARGIN = 0.4
         if not is_point_safe(
-            local_x, local_y, detected_obstacles, margin=MIN_SAFE_MARGIN
+            local_x, local_y, detected_obstacles, margin=SAFETY_RADIUS
         ):
             max_search_offset = 8
             found_safe = False
@@ -149,9 +149,7 @@ class LocalGoalSelector:
                         vehicle_y,
                         yaw,
                     )
-                    if is_point_safe(
-                        lx, ly, detected_obstacles, margin=MIN_SAFE_MARGIN
-                    ):
+                    if is_point_safe(lx, ly, detected_obstacles, margin=SAFETY_RADIUS):
                         target_idx = idx_ahead
                         local_x, local_y = lx, ly
                         found_safe = True
@@ -169,7 +167,7 @@ class LocalGoalSelector:
                             yaw,
                         )
                         if is_point_safe(
-                            lx, ly, detected_obstacles, margin=MIN_SAFE_MARGIN
+                            lx, ly, detected_obstacles, margin=SAFETY_RADIUS
                         ):
                             target_idx = idx_behind
                             local_x, local_y = lx, ly
@@ -189,7 +187,7 @@ class LocalGoalSelector:
                     yaw,
                 )
                 if is_point_safe(
-                    lx_closest, ly_closest, detected_obstacles, margin=MIN_SAFE_MARGIN
+                    lx_closest, ly_closest, detected_obstacles, margin=SAFETY_RADIUS
                 ):
                     local_x, local_y = lx_closest, ly_closest
                     target_idx = closest_idx

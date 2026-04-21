@@ -1,3 +1,5 @@
+from goof_an_odd_husky.local_navigation.safety import is_point_safe, is_segment_safe
+from goof_an_odd_husky.local_navigation.astar_local import astar_visibility_path
 import threading
 
 import rclpy
@@ -15,11 +17,20 @@ from std_msgs.msg import String, Empty, Header
 from goof_an_odd_husky_common.config import (
     TOPICS,
     MAX_TRAJECTORY_DISTANCE,
+    SAFETY_RADIUS,
     BARRIER_OFFSET,
     HEARTBEAT_TIMEOUT_SEC,
     USE_GPS,
     DEBUG,
     SIM,
+    MAX_V,
+    MAX_A,
+    INITIAL_STEP,
+    CLUSTER_BREAK_DISTANCE,
+    GEOMETRY_SPLIT_THRESHOLD,
+    MIN_SCAN_RANGE,
+    MEDIAN_FILTER_SIZE,
+    SOFTMIN_ALPHA,
 )
 from goof_an_odd_husky_common.helpers import (
     quat_to_yaw,
@@ -94,6 +105,7 @@ class ControllerNode(Node):
         initial_goal: Initial goal pose for the TEB planner.
         planner: The TEB local planner instance.
         needs_initial_plan: Boolean flag to trigger an initial TEB plan.
+        needs_astar_plan: Boolean flag to trigger an A* plan in case the current trajectory intersects an obstacle.
         path_manager: Manager for the global A* path logic.
         goal_selector: Selector for the immediate local goal.
         obstacle_pipeline: Pipeline for processing LiDAR scans into geometric obstacles.
@@ -137,12 +149,13 @@ class ControllerNode(Node):
     initial_goal: list[float]
     planner: TEBPlanner
     needs_initial_plan: bool
+    needs_astar_plan: bool
 
     path_manager: GlobalPathManager
     goal_selector: LocalGoalSelector
     obstacle_pipeline: ObstaclePipeline
 
-    def __init__(self, debug: bool = False, use_gps: bool = True) -> None:
+    def __init__(self, use_gps: bool, debug: bool = False) -> None:
         """Initialize the ControllerNode.
 
         Args:
@@ -193,7 +206,10 @@ class ControllerNode(Node):
             callback_group=self.nav_cmd_cb_group,
         )
         self.cancel_subscription = self.create_subscription(
-            Header, "/nav/cancel", self.cancel_callback, LATCHED_QOS,
+            Header,
+            "/nav/cancel",
+            self.cancel_callback,
+            LATCHED_QOS,
             callback_group=self.nav_cmd_cb_group,
         )
         self.heartbeat_subscription = self.create_subscription(
@@ -236,8 +252,17 @@ class ControllerNode(Node):
 
         self.initial_start = [0.0, 0.0, 0.0]
         self.initial_goal = [0.0, 0.0, 0.0]
-        self.planner = TEBPlanner(self.initial_start, self.initial_goal)
+        self.planner = TEBPlanner(
+            self.initial_start,
+            self.initial_goal,
+            max_v=MAX_V,
+            max_a=MAX_A,
+            initial_step=INITIAL_STEP,
+            safety_radius=SAFETY_RADIUS,
+            softmin_alpha=SOFTMIN_ALPHA,
+        )
         self.needs_initial_plan = False
+        self.needs_astar_plan = False
 
         self.path_manager = GlobalPathManager(
             use_gps=self.use_gps, logger=self.get_logger()
@@ -245,7 +270,12 @@ class ControllerNode(Node):
         self.goal_selector = LocalGoalSelector(
             max_trajectory_distance=MAX_TRAJECTORY_DISTANCE, logger=self.get_logger()
         )
-        self.obstacle_pipeline = ObstaclePipeline()
+        self.obstacle_pipeline = ObstaclePipeline(
+            CLUSTER_BREAK_DISTANCE,
+            GEOMETRY_SPLIT_THRESHOLD,
+            MIN_SCAN_RANGE,
+            MEDIAN_FILTER_SIZE,
+        )
 
         self._publish_status("idle")
 
@@ -267,7 +297,15 @@ class ControllerNode(Node):
         self.last_goal_stamp = msg.header.stamp
         self.path_manager.set_goal(GpsCoord(msg.pose.position.x, msg.pose.position.y))
         with self.data_lock:
-            self.planner = TEBPlanner(self.initial_start, self.initial_goal)
+            self.planner = TEBPlanner(
+                self.initial_start,
+                self.initial_goal,
+                max_v=MAX_V,
+                max_a=MAX_A,
+                initial_step=INITIAL_STEP,
+                safety_radius=SAFETY_RADIUS,
+                softmin_alpha=SOFTMIN_ALPHA,
+            )
             self.needs_initial_plan = True
 
         self._publish_status("navigating")
@@ -286,11 +324,9 @@ class ControllerNode(Node):
             msg: Header carrying the timestamp of the cancel request.
         """
         last_goal = getattr(self, "last_goal_stamp", None)
-        cancel_is_newer = (
-            last_goal is None
-            or rclpy.time.Time.from_msg(msg.stamp)
-               > rclpy.time.Time.from_msg(last_goal)
-        )
+        cancel_is_newer = last_goal is None or rclpy.time.Time.from_msg(
+            msg.stamp
+        ) > rclpy.time.Time.from_msg(last_goal)
         if not cancel_is_newer:
             return
         self.path_manager.cancel_goal()
@@ -350,8 +386,9 @@ class ControllerNode(Node):
     def control_loop(self) -> None:
         """Main control loop responsible for executing planner step and publishing commands."""
 
-        with PerformanceTracker(self.get_logger(), log_level='debug', throttle_sec=2.0) as performance:
-
+        with PerformanceTracker(
+            self.get_logger(), log_level="debug", throttle_sec=2.0
+        ) as performance:
             with self.data_lock:
                 scan, scan_time = self.latest_scan, self.last_scan_time
                 odom_g = self.latest_odom
@@ -375,11 +412,15 @@ class ControllerNode(Node):
             self._log_robot_location(robot_pose, gps_data)
 
             if not self._visualizer_is_alive():
-                self.get_logger().warn("Waiting for visualizer...", throttle_duration_sec=2.0)
+                self.get_logger().warn(
+                    "Waiting for visualizer...", throttle_duration_sec=2.0
+                )
                 self._publish_velocity(0.0, 0.0)
                 return
 
-            self.path_manager.update_local_path_from_gps(gps_data, robot_pose.x, robot_pose.y)
+            self.path_manager.update_local_path_from_gps(
+                gps_data, robot_pose.x, robot_pose.y
+            )
             local_path_snapshot = self.path_manager.get_local_path_snapshot()
             if local_path_snapshot:
                 self._publish_global_path(local_path_snapshot)
@@ -388,20 +429,26 @@ class ControllerNode(Node):
             performance.update("Obstacle processing")
 
             if detected_obstacles is None:
-                self.get_logger().warn("Obstacle detection failed", throttle_duration_sec=2.0)
+                self.get_logger().warn(
+                    "Obstacle detection failed", throttle_duration_sec=2.0
+                )
                 self._publish_velocity(0.0, 0.0)
                 return
 
             self._publish_obstacles(detected_obstacles)
 
             if not self.path_manager.has_goal():
-                self.get_logger().debug("Waiting for a goal...", throttle_duration_sec=2.0)
+                self.get_logger().debug(
+                    "Waiting for a goal...", throttle_duration_sec=2.0
+                )
                 self._publish_robot_pose(robot_pose)
                 self._publish_velocity(0.0, 0.0)
                 return
 
             if self.use_gps and not self.first_gps:
-                self.get_logger().warn("Waiting for GPS anchor...", throttle_duration_sec=2.0)
+                self.get_logger().warn(
+                    "Waiting for GPS anchor...", throttle_duration_sec=2.0
+                )
                 return
 
             self.path_manager.generate_path(gps_data, robot_pose.x, robot_pose.y)
@@ -424,7 +471,9 @@ class ControllerNode(Node):
             performance.update("Goal update")
 
             if selection is None:
-                self.get_logger().error("No local goal could be selected", throttle_duration_sec=2.0)
+                self.get_logger().error(
+                    "No local goal could be selected", throttle_duration_sec=2.0
+                )
                 self._publish_velocity(0.0, 0.0)
                 return
 
@@ -448,8 +497,17 @@ class ControllerNode(Node):
             performance.update("Corridor generation")
 
             self.planner.move_goal(local_goal, (0.0,))
-            if self.needs_initial_plan:
-                self.planner.plan()
+            astar_waypoints: list[tuple[float, float]] | None = None
+            if self.needs_astar_plan:
+                astar_waypoints = astar_visibility_path(
+                    start_xy=(self.planner.start_pose[0], self.planner.start_pose[1]),
+                    goal_xy=(local_goal[0], local_goal[1]),
+                    obstacles=detected_obstacles,
+                )
+                self.needs_astar_plan = False
+
+            if self.needs_initial_plan or astar_waypoints is not None:
+                self.planner.plan(waypoints=astar_waypoints)
                 self.needs_initial_plan = False
 
             self.planner.refine(
@@ -460,6 +518,25 @@ class ControllerNode(Node):
             performance.update("Planner refinement")
 
             trajectory = self.planner.get_trajectory()
+
+            if (
+                trajectory is not None
+                and len(trajectory) > 1
+                and any(
+                    not is_segment_safe(
+                        float(trajectory[i][0]),
+                        float(trajectory[i][1]),
+                        float(trajectory[i + 1][0]),
+                        float(trajectory[i + 1][1]),
+                        detected_obstacles,
+                    )
+                    for i in range(len(trajectory) - 1)
+                )
+            ):
+                self.needs_astar_plan = True
+                self.get_logger().warn(
+                    "Trajectory collides; queued A* replan", throttle_duration_sec=1.0
+                )
 
             with self.data_lock:
                 latest_odom_after = self.latest_odom
@@ -660,7 +737,7 @@ def main(args=None) -> None:
         args: Command line arguments passed to ROS 2 init.
     """
     rclpy.init(args=args)
-    node = ControllerNode(debug=DEBUG, use_gps=USE_GPS)
+    node = ControllerNode(use_gps=USE_GPS, debug=DEBUG)
 
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)

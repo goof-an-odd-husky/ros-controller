@@ -32,7 +32,7 @@ class VisualizerNode(Node):
     visualizer: TrajectoryVisualizer
     use_gps: bool
 
-    def __init__(self, use_gps: bool = True) -> None:
+    def __init__(self, use_gps: bool) -> None:
         super().__init__("visualizer_node")
         self.use_gps = use_gps
         self.data_lock = threading.Lock()
@@ -97,11 +97,11 @@ class VisualizerNode(Node):
         self.heartbeat_timer = self.create_timer(1.0, self._publish_heartbeat)
 
         self.visualizer = TrajectoryVisualizer(
+            use_gps=use_gps,
             x_lim=(-10, 10),
             y_lim=(-4, 16),
             path_render_mode="both",
             interactive_obstacles=False,
-            use_gps=use_gps,
             on_goal_set=self._on_goal_set,
             on_cancel=self._on_cancel_pressed,
         )

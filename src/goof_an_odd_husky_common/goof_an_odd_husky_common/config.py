@@ -21,6 +21,21 @@ HEARTBEAT_TIMEOUT_SEC: float = 5.0
 
 MAX_PATH_EDGE: int = 2
 MAX_TRAJECTORY_DISTANCE: int = 7
+SAFETY_RADIUS: float = 1.0
+
+MIN_CIRCLE_RADIUS: float = 0.2
+MAX_CIRCLE_RADIUS: float = 3.5
+MAX_LINE_DISTANCE: float = 0.2
+CLUSTER_BREAK_DISTANCE: float = 1.5
+GEOMETRY_SPLIT_THRESHOLD: float = 2.5
+MIN_SCAN_RANGE: float = 0.33
+MEDIAN_FILTER_SIZE: int = 3
+
+MAX_V: float = 0.5
+MAX_A: float = 0.05
+INITIAL_STEP: float = 1.8
+
+SOFTMIN_ALPHA: float = -7.0 # SegmentLineObstaclesCost softmin
 
 BARRIER_OFFSET: float = 2
 

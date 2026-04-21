@@ -72,16 +72,18 @@ class TEBPlanner(TrajectoryPlanner):
     max_a: float
     initial_step: float
     safety_radius: float
+    softmin_alpha: float
     traj: TrajectoryState
 
     def __init__(
         self,
         start_pose: NDArray[np.floating] | list[float],
         goal_pose: NDArray[np.floating] | list[float],
-        max_v: float = 0.5,
-        max_a: float = 0.05,
-        initial_step: float = 1.0,
-        safety_radius: float = 1.0,
+        max_v: float,
+        max_a: float,
+        initial_step: float,
+        safety_radius: float,
+        softmin_alpha: float,
     ) -> None:
         """Initializes the TEBPlanner.
 
@@ -92,48 +94,76 @@ class TEBPlanner(TrajectoryPlanner):
             max_a: Maximum linear acceleration.
             initial_step: Initial spacing distance for trajectory points.
             safety_radius: Minimum allowable distance to obstacles.
+            softmin_alpha: A value used in softmin, which replaces min to avoid non-smooth jacobians
         """
         self.setup_poses(start_pose, goal_pose)
         self.max_v = max_v
         self.max_a = max_a
         self.initial_step = initial_step
         self.safety_radius = safety_radius
+        self.softmin_alpha = softmin_alpha
         self.traj = TrajectoryState()
 
     @override
-    def plan(self) -> Trajectory | None:
-        """Generates an initial straight-line trajectory to the goal.
+    def plan(self, waypoints: list[tuple[float, float]] | None = None) -> Trajectory | None:
+        """Generates an initial trajectory to the goal, optionally routed through waypoints.
+
+        If waypoints are provided (e.g. from an A* planner), the trajectory follows
+        that piecewise-linear path with uniform point spacing along each segment.
+        Without waypoints, falls back to a straight-line trajectory from start to goal.
+        Headings at intermediate points are set tangent to the path direction; the
+        first and last points inherit start and goal headings respectively.
+
+        Args:
+            waypoints: Optional ordered list of (x, y) positions defining the path
+                skeleton, including start and goal. Interior points are used as
+                intermediate waypoints; the first and last entries are ignored in
+                favour of `start_pose` and `goal_pose`. If None or fewer than 2
+                points, a straight-line trajectory is generated.
 
         Returns:
-            Trajectory | None: The initial trajectory array Nx4 [x, y, th, dt].
+            The initialised trajectory as an Nx4 array [x, y, theta, dt], or None
+            if the trajectory container is uninitialised.
         """
         if np.array_equal(self.start_pose, self.goal_pose):
             return np.array([np.append(self.start_pose, 0.0)])
 
-        dist = np.linalg.norm(self.goal_pose[:2] - self.start_pose[:2])
-        n_points = max(2, int(np.ceil(dist / self.initial_step)) + 1)
+        path_xy: list[tuple[float, float]] = (
+            [(self.start_pose[0], self.start_pose[1])]
+            + (waypoints[1:-1] if len(waypoints) > 2 else [])
+            + [(self.goal_pose[0], self.goal_pose[1])]
+            if waypoints is not None and len(waypoints) >= 2
+            else [(self.start_pose[0], self.start_pose[1]),
+                  (self.goal_pose[0], self.goal_pose[1])]
+        )
 
-        xs = np.linspace(self.start_pose[0], self.goal_pose[0], n_points)
-        ys = np.linspace(self.start_pose[1], self.goal_pose[1], n_points)
+        dense_points: list[tuple[float, float]] = []
+        for seg_start, seg_end in zip(path_xy[:-1], path_xy[1:]):
+            seg_len = np.hypot(seg_end[0] - seg_start[0], seg_end[1] - seg_start[1])
+            n_seg = max(2, int(np.ceil(seg_len / self.initial_step)) + 1)
+            xs = np.linspace(seg_start[0], seg_end[0], n_seg)
+            ys = np.linspace(seg_start[1], seg_end[1], n_seg)
+            for i in range(n_seg - 1):
+                dense_points.append((float(xs[i]), float(ys[i])))
+        dense_points.append(path_xy[-1])
 
-        delta = self.goal_pose[:2] - self.start_pose[:2]
-        goal_heading = np.arctan2(delta[1], delta[0])
+        n_total = len(dense_points)
         dt_init = self.initial_step / self.max_v
-
         self.traj.clear()
 
-        for i, (x, y) in enumerate(zip(xs, ys)):
+        for i, (x, y) in enumerate(dense_points):
             self.traj.xy.append(np.array([x, y], dtype=np.float64))
 
             if i == 0:
                 th = self.start_pose[2]
-            elif i == n_points - 1:
+            elif i == n_total - 1:
                 th = self.goal_pose[2]
             else:
-                th = goal_heading
+                nx, ny = dense_points[i + 1]
+                th = np.arctan2(ny - y, nx - x)
             self.traj.theta.append(np.array([th], dtype=np.float64))
 
-            if i < n_points - 1:
+            if i < n_total - 1:
                 self.traj.dt.append(np.array([dt_init], dtype=np.float64))
 
         return self.get_trajectory()
@@ -312,7 +342,7 @@ class TEBPlanner(TrajectoryPlanner):
         if not self.traj:
             return False
 
-        self.resize_trajectory(0.5, 1.05)
+        self.resize_trajectory(0.5, 2.0)
 
         if len(self.traj) <= 2:
             return False
@@ -346,7 +376,7 @@ class TEBPlanner(TrajectoryPlanner):
         time_cost = SegmentTimeCost(weight=1.0)
 
         obstacle_filter = ObstacleFilter(
-            circle_obstacles, line_obstacles, self.safety_radius * 3.0
+            circle_obstacles, line_obstacles, self.safety_radius * 1.8
         )
 
         n_points = len(self.traj)
@@ -379,7 +409,7 @@ class TEBPlanner(TrajectoryPlanner):
             )
             if close_lines:
                 line_obstacles_cost = SegmentLineObstaclesCost(
-                    close_lines, weight=200.0, safety_radius=self.safety_radius
+                    close_lines, weight=200.0, safety_radius=self.safety_radius, softmin_alpha=self.softmin_alpha
                 )
                 self._keep_alive.append(line_obstacles_cost)
                 problem.add_residual_block(
@@ -426,9 +456,9 @@ class TEBPlanner(TrajectoryPlanner):
             # problem.add_residual_block(
             #     heading_cost, None, [xy_curr, theta_curr, xy_next]
             # ) # Don't penalize reverse. TODO: check, whether necessary
-            problem.add_residual_block(
-                angular_smoothing_cost, None, [theta_curr, theta_next, dt]
-            )
+            # problem.add_residual_block(
+            #     angular_smoothing_cost, None, [theta_curr, theta_next, dt]
+            # )
 
             problem.set_parameter_lower_bound(dt, 0, DT_MIN)
 

@@ -7,6 +7,11 @@ from sensor_msgs.msg import LaserScan
 from scipy.ndimage import median_filter
 
 from goof_an_odd_husky_common.helpers import point_segment_distance, segments_intersect
+from goof_an_odd_husky_common.config import (
+    MIN_CIRCLE_RADIUS,
+    MAX_CIRCLE_RADIUS,
+    MAX_LINE_DISTANCE,
+)
 from goof_an_odd_husky_common.obstacles import Obstacle, CircleObstacle, LineObstacle
 
 
@@ -41,7 +46,7 @@ class CircleExtractor(ObstacleExtractor):
     min_radius: float
     max_radius: float
 
-    def __init__(self, min_radius: float = 0.2, max_radius: float = 3.5):
+    def __init__(self, min_radius: float, max_radius: float):
         """Initializes the CircleExtractor.
 
         Args:
@@ -111,7 +116,7 @@ class LineExtractor(ObstacleExtractor):
 
     max_distance: float
 
-    def __init__(self, max_distance: float = 0.2):
+    def __init__(self, max_distance: float):
         """Initializes the LineExtractor.
 
         Args:
@@ -172,10 +177,10 @@ class ObstaclePipeline:
 
     def __init__(
         self,
-        cluster_break_distance: float = 1.5,
-        geometry_split_threshold: float = 2.5,
-        min_range: float = 0.33,
-        median_filter_size: int = 3,
+        cluster_break_distance: float,
+        geometry_split_threshold: float,
+        min_range: float,
+        median_filter_size: int,
     ):
         """Initialize pipeline parameters.
 
@@ -189,8 +194,8 @@ class ObstaclePipeline:
         self.geometry_split_threshold = geometry_split_threshold
         self.min_range = min_range
         self.median_filter_size = median_filter_size
-        self.circle_extractor = CircleExtractor()
-        self.line_extractor = LineExtractor()
+        self.circle_extractor = CircleExtractor(MIN_CIRCLE_RADIUS, MAX_CIRCLE_RADIUS)
+        self.line_extractor = LineExtractor(MAX_LINE_DISTANCE)
 
     def process(self, scan_msg: LaserScan, is_sim: bool = True) -> list[Obstacle]:
         points = self._scan_to_cartesian(scan_msg, not is_sim)
@@ -269,10 +274,8 @@ class ObstaclePipeline:
             + 1
         )
         return np.split(points, breakpoints)
-    
-    def _median_filter(
-        self, points: NDArray[np.floating]
-    ) -> NDArray[np.floating]:
+
+    def _median_filter(self, points: NDArray[np.floating]) -> NDArray[np.floating]:
         if len(points) < self.median_filter_size:
             return points
 

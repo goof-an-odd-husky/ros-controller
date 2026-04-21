@@ -134,13 +134,13 @@ class TrajectoryVisualizer:
 
     def __init__(
         self,
+        use_gps: bool,
         x_lim: tuple[float, float] = (0, 10),
         y_lim: tuple[float, float] = (0, 10),
         title: str = "TEB Optimization",
         path_render_mode: PathRenderMode | str = PathRenderMode.STRAIGHT,
         interactive_obstacles: bool = True,
         use_global: bool = False,
-        use_gps: bool = True,
         on_goal_set: Callable[[float, float], None] | None = None,
         on_cancel: Callable[[], None] | None = None,
     ) -> None:

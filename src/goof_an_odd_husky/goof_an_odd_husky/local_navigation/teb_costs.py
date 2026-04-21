@@ -29,7 +29,7 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
     D_x: NDArray[np.float64]
     D_y: NDArray[np.float64]
     n_obstacles: int
-    weight: float
+    sqrt_weight: float
     safety_radius: float
     softmin_alpha: float
 
@@ -56,7 +56,7 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
         self.D_y = np.array([obs.y2 for obs in line_obstacles], dtype=np.float64)
 
         self.n_obstacles = len(self.C_x)
-        self.weight = weight
+        self.sqrt_weight = np.sqrt(weight)
         self.safety_radius = safety_radius
         self.softmin_alpha = softmin_alpha
 
@@ -107,7 +107,9 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
 
         errors = self.safety_radius - d_min
         active_mask = errors > 0.0
-        residuals[:] = np.where(active_mask, self.weight * errors, 0.0)
+
+        sqrt_w = self.sqrt_weight
+        residuals[:] = np.where(active_mask, sqrt_w * errors, 0.0)
 
         if jacobians is not None:
             inv_d1 = 1.0 / np.maximum(d1, 1e-8)
@@ -125,6 +127,7 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
                 + w3 * (-(1.0 - t3) * u3_y * inv_d3)
                 + w4 * (-(1.0 - t4) * u4_y * inv_d4)
             )
+
             gB_x_min = (
                 w2 * u2_x * inv_d2
                 + w3 * (-t3 * u3_x * inv_d3)
@@ -136,7 +139,7 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
                 + w4 * (-t4 * u4_y * inv_d4)
             )
 
-            j_scaler = np.where(active_mask, -self.weight, 0.0)
+            j_scaler = np.where(active_mask, -sqrt_w, 0.0)
 
             if jacobians[0] is not None:
                 jacobians[0][:] = np.vstack(
@@ -147,7 +150,6 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
                     (j_scaler * gB_x_min, j_scaler * gB_y_min)
                 ).T.ravel()
 
-        return True
         return True
 
 
@@ -167,7 +169,7 @@ class SegmentCircleObstaclesCost(pyceres.CostFunction):
     obstacles_y: NDArray[np.float64]
     obstacles_r: NDArray[np.float64]
     n_obstacles: int
-    weight: float
+    sqrt_weight: float
     safety_radius: float
 
     def __init__(
@@ -196,7 +198,7 @@ class SegmentCircleObstaclesCost(pyceres.CostFunction):
         )
 
         self.n_obstacles = len(self.obstacles_r)
-        self.weight = weight
+        self.sqrt_weight = np.sqrt(weight)
         self.safety_radius = safety_radius
 
         self.set_num_residuals(self.n_obstacles)
@@ -239,15 +241,15 @@ class SegmentCircleObstaclesCost(pyceres.CostFunction):
 
         errors = self.obstacles_r + self.safety_radius - O1O_len
         mask = errors > 0.0
-        w = self.weight
-        residuals[:] = np.where(mask, w * errors, 0.0)
+        sqrt_w = self.sqrt_weight
+        residuals[:] = np.where(mask, sqrt_w * errors, 0.0)
 
         if jacobians is not None:
             inv_dist = 1.0 / O1O_len
             d_hat_x = O1O_x * inv_dist
             d_hat_y = O1O_y * inv_dist
 
-            j_scaler = np.where(mask, w, 0.0)
+            j_scaler = np.where(mask, sqrt_w, 0.0)
 
             if jacobians[0] is not None:
                 j_A_factor = j_scaler * (1.0 - t)
@@ -274,7 +276,7 @@ class SegmentVelocityCost(pyceres.CostFunction):
         max_v: Maximum allowed linear velocity.
     """
 
-    weight: float
+    sqrt_weight: float
     max_v: float
 
     def __init__(self, weight: float, max_v: float) -> None:
@@ -285,7 +287,7 @@ class SegmentVelocityCost(pyceres.CostFunction):
             max_v: Maximum linear velocity allowed.
         """
         super().__init__()
-        self.weight = weight
+        self.sqrt_weight = np.sqrt(weight)
         self.max_v = max_v
 
         self.set_num_residuals(1)
@@ -324,8 +326,8 @@ class SegmentVelocityCost(pyceres.CostFunction):
         if v > self.max_v:
             diff = v - self.max_v
 
-        w = self.weight
-        residuals[0] = w * diff
+        sqrt_w = self.sqrt_weight
+        residuals[0] = sqrt_w * diff
 
         if jacobians is not None:
             if v <= self.max_v:
@@ -337,7 +339,7 @@ class SegmentVelocityCost(pyceres.CostFunction):
                     jacobians[2][0] = 0.0
                 return True
 
-            dr_dv = w
+            dr_dv = sqrt_w
             scale = dr_dv / (AB_len * dt)
 
             if jacobians[0] is not None:
@@ -363,7 +365,7 @@ class SegmentAngularVelocityCost(pyceres.CostFunction):
         max_omega: Maximum allowed angular velocity.
     """
 
-    weight: float
+    sqrt_weight: float
     max_omega: float
 
     def __init__(self, weight: float, max_omega: float) -> None:
@@ -374,7 +376,7 @@ class SegmentAngularVelocityCost(pyceres.CostFunction):
             max_omega: Maximum angular velocity allowed.
         """
         super().__init__()
-        self.weight = weight
+        self.sqrt_weight = np.sqrt(weight)
         self.max_omega = max_omega
 
         self.set_num_residuals(1)
@@ -413,8 +415,8 @@ class SegmentAngularVelocityCost(pyceres.CostFunction):
         elif omega < -self.max_omega:
             diff = omega + self.max_omega
 
-        w = self.weight
-        residuals[0] = w * diff
+        sqrt_w = self.sqrt_weight
+        residuals[0] = sqrt_w * diff
 
         if jacobians is not None:
             if abs(omega) <= self.max_omega:
@@ -426,7 +428,7 @@ class SegmentAngularVelocityCost(pyceres.CostFunction):
                     jacobians[2][0] = 0.0
                 return True
 
-            dr_ddelta_theta = w * inv_dt
+            dr_ddelta_theta = sqrt_w * inv_dt
 
             if jacobians[0] is not None:
                 jacobians[0][0] = -dr_ddelta_theta
@@ -435,7 +437,7 @@ class SegmentAngularVelocityCost(pyceres.CostFunction):
                 jacobians[1][0] = dr_ddelta_theta
 
             if jacobians[2] is not None:
-                jacobians[2][0] = -w * omega * inv_dt
+                jacobians[2][0] = -sqrt_w * omega * inv_dt
 
         return True
 
@@ -448,7 +450,7 @@ class SegmentAccelerationCost(pyceres.CostFunction):
         max_a: Maximum allowed linear acceleration.
     """
 
-    weight: float
+    sqrt_weight: float
     max_a: float
 
     def __init__(self, weight: float, max_a: float) -> None:
@@ -459,7 +461,7 @@ class SegmentAccelerationCost(pyceres.CostFunction):
             max_a: Maximum linear acceleration allowed.
         """
         super().__init__()
-        self.weight = weight
+        self.sqrt_weight = np.sqrt(weight)
         self.max_a = max_a
         self.set_num_residuals(1)
         self.set_parameter_block_sizes([2, 2, 2, 1, 1])
@@ -514,10 +516,10 @@ class SegmentAccelerationCost(pyceres.CostFunction):
                         jacobians[i][:] = 0.0
             return True
 
-        residuals[0] = self.weight * diff
+        residuals[0] = self.sqrt_weight * diff
 
         if jacobians is not None:
-            w_norm = self.weight / a_norm
+            w_norm = self.sqrt_weight / a_norm
 
             dax_dA = inv_dt_avg / dt1
             jac_A = [w_norm * (ax * dax_dA), w_norm * (ay * dax_dA)]
@@ -558,7 +560,7 @@ class SegmentAngularAccelerationCost(pyceres.CostFunction):
         max_alpha: Maximum allowed angular acceleration.
     """
 
-    weight: float
+    sqrt_weight: float
     max_alpha: float
 
     def __init__(self, weight: float, max_alpha: float) -> None:
@@ -569,7 +571,7 @@ class SegmentAngularAccelerationCost(pyceres.CostFunction):
             max_alpha: Maximum angular acceleration allowed.
         """
         super().__init__()
-        self.weight = weight
+        self.sqrt_weight = np.sqrt(weight)
         self.max_alpha = max_alpha
 
         self.set_num_residuals(1)
@@ -619,8 +621,8 @@ class SegmentAngularAccelerationCost(pyceres.CostFunction):
         elif alpha < -self.max_alpha:
             diff = alpha + self.max_alpha
 
-        w = self.weight
-        residuals[0] = w * diff
+        sqrt_w = self.sqrt_weight
+        residuals[0] = sqrt_w * diff
 
         if jacobians is not None:
             if diff == 0.0:
@@ -636,7 +638,7 @@ class SegmentAngularAccelerationCost(pyceres.CostFunction):
                     jacobians[4][0] = 0.0
                 return True
 
-            factor = 2.0 * w * inv_dt
+            factor = 2.0 * sqrt_w * inv_dt
 
             if jacobians[0] is not None:
                 jacobians[0][0] = factor * inv_dt1
@@ -648,10 +650,10 @@ class SegmentAngularAccelerationCost(pyceres.CostFunction):
                 jacobians[2][0] = factor * inv_dt2
 
             if jacobians[3] is not None:
-                jacobians[3][0] = factor * omega1 * inv_dt1 - w * alpha * inv_dt
+                jacobians[3][0] = factor * omega1 * inv_dt1 - sqrt_w * alpha * inv_dt
 
             if jacobians[4] is not None:
-                jacobians[4][0] = -factor * omega2 * inv_dt2 - w * alpha * inv_dt
+                jacobians[4][0] = -factor * omega2 * inv_dt2 - sqrt_w * alpha * inv_dt
 
         return True
 
@@ -666,7 +668,7 @@ class StartAccelerationCost(pyceres.CostFunction):
         vy_start: Initial Y velocity.
     """
 
-    weight: float
+    sqrt_weight: float
     max_a: float
     vx_start: float
     vy_start: float
@@ -682,7 +684,7 @@ class StartAccelerationCost(pyceres.CostFunction):
             current_v: The starting linear velocity vector (vx, vy).
         """
         super().__init__()
-        self.weight = weight
+        self.sqrt_weight = np.sqrt(weight)
         self.max_a = max_a
         self.vx_start = current_v[0]
         self.vy_start = current_v[1]
@@ -733,10 +735,10 @@ class StartAccelerationCost(pyceres.CostFunction):
                     jacobians[2][:] = 0.0
             return True
 
-        residuals[0] = self.weight * diff
+        residuals[0] = self.sqrt_weight * diff
 
         if jacobians:
-            w_norm = self.weight / a_norm
+            w_norm = self.sqrt_weight / a_norm
             inv_dt = 1.0 / dt
             inv_dt_sq = inv_dt * inv_dt
 
@@ -762,7 +764,7 @@ class StartAngularAccelerationCost(pyceres.CostFunction):
         omega_start: Initial angular velocity.
     """
 
-    weight: float
+    sqrt_weight: float
     max_alpha: float
     omega_start: float
 
@@ -775,7 +777,7 @@ class StartAngularAccelerationCost(pyceres.CostFunction):
             current_omega: The starting angular velocity.
         """
         super().__init__()
-        self.weight = weight
+        self.sqrt_weight = np.sqrt(weight)
         self.max_alpha = max_alpha
         self.omega_start = current_omega
         self.set_parameter_block_sizes([1, 1, 1])
@@ -821,10 +823,10 @@ class StartAngularAccelerationCost(pyceres.CostFunction):
             return True
 
         sign = 1.0 if alpha > 0 else -1.0
-        residuals[0] = self.weight * diff
+        residuals[0] = self.sqrt_weight * diff
 
         if jacobians:
-            w = self.weight * sign
+            sqrt_w = self.sqrt_weight * sign
             inv_dt = 1.0 / dt
             inv_dt2 = inv_dt * inv_dt
 
@@ -835,9 +837,9 @@ class StartAngularAccelerationCost(pyceres.CostFunction):
             if jacobians[0] is not None:
                 jacobians[0][:] = 0.0
             if jacobians[1] is not None:
-                jacobians[1][:] = [w * d_alpha_dth]
+                jacobians[1][:] = [sqrt_w * d_alpha_dth]
             if jacobians[2] is not None:
-                jacobians[2][:] = [w * d_alpha_dt]
+                jacobians[2][:] = [sqrt_w * d_alpha_dt]
 
         return True
 
@@ -849,7 +851,7 @@ class SegmentKinematicsCost(pyceres.CostFunction):
         weight: Penalty weight multiplier.
     """
 
-    weight: float
+    sqrt_weight: float
 
     def __init__(self, weight: float) -> None:
         """Initialize SegmentKinematicsCost.
@@ -858,7 +860,7 @@ class SegmentKinematicsCost(pyceres.CostFunction):
             weight: Cost multiplier.
         """
         super().__init__()
-        self.weight = weight
+        self.sqrt_weight = np.sqrt(weight)
 
         self.set_num_residuals(1)
         self.set_parameter_block_sizes([2, 1, 2, 1])
@@ -895,26 +897,26 @@ class SegmentKinematicsCost(pyceres.CostFunction):
 
         error = cos_sum * dy - sin_sum * dx
 
-        w = self.weight
-        residuals[:] = w * error
+        sqrt_w = self.sqrt_weight
+        residuals[:] = sqrt_w * error
 
         if jacobians is not None:
-            w_sin_sum = w * sin_sum
-            w_cos_sum = w * cos_sum
+            w_sin_sum = sqrt_w * sin_sum
+            w_cos_sum = sqrt_w * cos_sum
 
             if jacobians[0] is not None:
                 jacobians[0][:] = [w_sin_sum, -w_cos_sum]
 
             if jacobians[1] is not None:
                 term = -(dy * s1 + dx * c1)
-                jacobians[1][:] = w * term
+                jacobians[1][:] = sqrt_w * term
 
             if jacobians[2] is not None:
                 jacobians[2][:] = [-w_sin_sum, w_cos_sum]
 
             if jacobians[3] is not None:
                 term = -(dy * s2 + dx * c2)
-                jacobians[3][:] = w * term
+                jacobians[3][:] = sqrt_w * term
 
         return True
 
@@ -926,7 +928,7 @@ class SegmentHeadingCost(pyceres.CostFunction):
         weight: Penalty weight multiplier.
     """
 
-    weight: float
+    sqrt_weight: float
 
     def __init__(self, weight: float) -> None:
         """Initialize SegmentHeadingCost.
@@ -935,7 +937,7 @@ class SegmentHeadingCost(pyceres.CostFunction):
             weight: Cost multiplier.
         """
         super().__init__()
-        self.weight = weight
+        self.sqrt_weight = np.sqrt(weight)
         self.set_num_residuals(1)
         self.set_parameter_block_sizes([2, 1, 2])
 
@@ -977,20 +979,20 @@ class SegmentHeadingCost(pyceres.CostFunction):
                     jacobians[2][:] = 0.0
             return True
 
-        w = self.weight
-        residuals[0] = w * (-dot)
+        sqrt_w = self.sqrt_weight
+        residuals[0] = sqrt_w * (-dot)
 
         if jacobians is not None:
             if jacobians[0] is not None:
-                jacobians[0][0] = w * c1
-                jacobians[0][1] = w * s1
+                jacobians[0][0] = sqrt_w * c1
+                jacobians[0][1] = sqrt_w * s1
 
             if jacobians[1] is not None:
-                jacobians[1][0] = w * (dx * s1 - dy * c1)
+                jacobians[1][0] = sqrt_w * (dx * s1 - dy * c1)
 
             if jacobians[2] is not None:
-                jacobians[2][0] = -w * c1
-                jacobians[2][1] = -w * s1
+                jacobians[2][0] = -sqrt_w * c1
+                jacobians[2][1] = -sqrt_w * s1
 
         return True
 
@@ -1002,7 +1004,7 @@ class SegmentAngularSmoothingCost(pyceres.CostFunction):
         weight: Penalty weight multiplier.
     """
 
-    weight: float
+    sqrt_weight: float
 
     def __init__(self, weight: float) -> None:
         """Initialize SegmentAngularSmoothingCost.
@@ -1011,7 +1013,7 @@ class SegmentAngularSmoothingCost(pyceres.CostFunction):
             weight: Cost multiplier.
         """
         super().__init__()
-        self.weight = weight
+        self.sqrt_weight = np.sqrt(weight)
 
         self.set_num_residuals(1)
         self.set_parameter_block_sizes([1, 1, 1])
@@ -1042,11 +1044,11 @@ class SegmentAngularSmoothingCost(pyceres.CostFunction):
 
         omega = delta_theta / dt
 
-        residuals[0] = self.weight * omega
+        residuals[0] = self.sqrt_weight * omega
 
         if jacobians is not None:
             inv_dt = 1.0 / dt
-            w_inv_dt = self.weight * inv_dt
+            w_inv_dt = self.sqrt_weight * inv_dt
 
             if jacobians[0] is not None:
                 jacobians[0][0] = -w_inv_dt
@@ -1067,7 +1069,7 @@ class SegmentTimeCost(pyceres.CostFunction):
         weight: Penalty weight multiplier.
     """
 
-    weight: float
+    sqrt_weight: float
 
     def __init__(self, weight: float) -> None:
         """Initialize SegmentTimeCost.
@@ -1076,7 +1078,7 @@ class SegmentTimeCost(pyceres.CostFunction):
             weight: Cost multiplier.
         """
         super().__init__()
-        self.weight = weight
+        self.sqrt_weight = np.sqrt(weight)
 
         self.set_num_residuals(1)
         self.set_parameter_block_sizes([1])
@@ -1099,10 +1101,10 @@ class SegmentTimeCost(pyceres.CostFunction):
         """
         dt = parameters[0][0]
 
-        w = self.weight
-        residuals[:] = w * dt
+        sqrt_w = self.sqrt_weight
+        residuals[:] = sqrt_w * dt
 
         if jacobians is not None and jacobians[0] is not None:
-            jacobians[0][0] = w
+            jacobians[0][0] = sqrt_w
 
         return True

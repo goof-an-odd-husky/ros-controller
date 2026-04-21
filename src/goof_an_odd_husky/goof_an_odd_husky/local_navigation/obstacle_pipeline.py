@@ -67,55 +67,18 @@ class CircleExtractor(ObstacleExtractor):
                     )
                 )
                 continue
-            # if n_points == 2:
-            obstacles.append(self._fallback_chord_width(cluster))
-            continue # TODO: try this algorithm, not fallback
-
-            p1 = cluster[0]
-            p3 = cluster[-1]
-            p2 = cluster[n_points // 2]
-
-            ax, ay = p1
-            bx, by = p2
-            cx, cy = p3
-
-            D = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
-
-            if abs(D) < 1e-6:
-                obstacles.append(self._fallback_chord_width(cluster))
-                continue
-
-            a_sq = ax**2 + ay**2
-            b_sq = bx**2 + by**2
-            c_sq = cx**2 + cy**2
-
-            center_x = (a_sq * (by - cy) + b_sq * (cy - ay) + c_sq * (ay - by)) / D
-            center_y = (a_sq * (cx - bx) + b_sq * (ax - cx) + c_sq * (bx - ax)) / D
-
-            center = np.array([center_x, center_y])
-            estimated_radius = float(np.linalg.norm(p1 - center))
-
-            if estimated_radius > self.max_radius:
-                obstacles.append(self._fallback_chord_width(cluster))
-                continue
-
-            distances_to_center = np.linalg.norm(cluster - center, axis=1)
-            final_radius = max(float(np.max(distances_to_center)), self.min_radius)
-
-            obstacles.append(
-                CircleObstacle(x=center_x, y=center_y, radius=final_radius)
-            )
+            obstacles.append(self.cluster_to_obstacle(cluster))
 
         return obstacles
 
-    def _fallback_chord_width(self, cluster: NDArray[np.floating]) -> CircleObstacle:
-        """Robust fallback method for mathematical anomalies.
+    def cluster_to_obstacle(self, cluster: NDArray[np.floating]) -> CircleObstacle:
+        """Robust method for circle extraction.
 
         Args:
             cluster: A numpy array representing clustered point cloud.
 
         Returns:
-            CircleObstacle: Extracted geometry obstacles.
+            CircleObstacle: An extracted geometry obstacle.
         """
         diffs = cluster[:, np.newaxis, :] - cluster[np.newaxis, :, :]
         distances = np.linalg.norm(diffs, axis=-1)
@@ -124,7 +87,7 @@ class CircleExtractor(ObstacleExtractor):
         estimated_radius = max(cluster_width / 2.0, self.min_radius)
         estimated_radius = min(estimated_radius, self.max_radius)
 
-        visible_center = np.mean(cluster, axis=0)
+        visible_center = cluster[:][len(cluster) // 2]
         dist_to_origin = np.linalg.norm(visible_center)
 
         if dist_to_origin > 1e-6:
@@ -194,7 +157,6 @@ class ObstaclePipeline:
     Attributes:
         cluster_break_distance: Gap threshold in meters to slice scans into clusters.
         geometry_split_threshold: Threshold to decide whether to map a cluster as a Line or Circle.
-        step: Ray skipping frequency to optimize computational overhead.
         min_range: Minimum range in meters; points closer than this are discarded.
         median_filter_size: The window size for median filter run on a scan.
         circle_extractor: Instance of CircleExtractor.
@@ -203,7 +165,6 @@ class ObstaclePipeline:
 
     cluster_break_distance: float
     geometry_split_threshold: float
-    step: int
     min_range: float
     circle_extractor: CircleExtractor
     line_extractor: LineExtractor
@@ -212,8 +173,7 @@ class ObstaclePipeline:
     def __init__(
         self,
         cluster_break_distance: float = 1.5,
-        geometry_split_threshold: float = 2,
-        step: int = 1,
+        geometry_split_threshold: float = 2.5,
         min_range: float = 0.33,
         median_filter_size: int = 3,
     ):
@@ -222,13 +182,11 @@ class ObstaclePipeline:
         Args:
             cluster_break_distance: Points farther apart than this start a new cluster.
             geometry_split_threshold: Clusters larger than this are fitted as lines.
-            step: Lidar downsampling rate.
             min_range: Minimum distance from sensor; points closer than this value (in meters) are filtered out.
             median_filter_size: The window size for median filter run on a scan.
         """
         self.cluster_break_distance = cluster_break_distance
         self.geometry_split_threshold = geometry_split_threshold
-        self.step = step
         self.min_range = min_range
         self.median_filter_size = median_filter_size
         self.circle_extractor = CircleExtractor()
@@ -273,7 +231,7 @@ class ObstaclePipeline:
             )
             arc_depth = abs(cross_prod) / chord_len
 
-            if 0.1 * chord_len < arc_depth < 0.65 * chord_len:
+            if 0.1 * chord_len < arc_depth < 0.7 * chord_len:
                 circle_clusters.append(cluster)
             else:
                 line_clusters.append(cluster)
@@ -289,10 +247,6 @@ class ObstaclePipeline:
         if invert:
             ranges = ranges[::-1]
         angles = scan_msg.angle_min + np.arange(len(ranges)) * scan_msg.angle_increment
-
-        if self.step > 1:
-            ranges = ranges[:: self.step]
-            angles = angles[:: self.step]
 
         valid = np.isfinite(ranges) & (ranges >= self.min_range)
         return np.column_stack(

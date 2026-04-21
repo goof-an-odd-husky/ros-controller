@@ -1,7 +1,7 @@
 USE_GPS: bool = False
 DEBUG: bool = True
 
-SIM: bool = False
+SIM: bool = True
 if SIM:
     TOPICS: dict[str, str] = {
         "cmd_vel": "/husky/cmd_vel",
@@ -19,8 +19,8 @@ else:
 
 HEARTBEAT_TIMEOUT_SEC: float = 5.0
 
-MAX_PATH_EDGE: int = 3
-MAX_TRAJECTORY_DISTANCE: int = 8
+MAX_PATH_EDGE: int = 2
+MAX_TRAJECTORY_DISTANCE: int = 7
 
 BARRIER_OFFSET: float = 2
 

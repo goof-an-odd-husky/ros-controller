@@ -84,6 +84,7 @@ def run_visualizer():
     sim.add_polyline([[5, 1], [6, -2], [3, -4]])
     sim.add_circle(x=-3, y=-1, r=0.2)
 
+    np.random.seed(42)
     scan_msg = sim.scan()
     
     pipeline = ObstaclePipeline()

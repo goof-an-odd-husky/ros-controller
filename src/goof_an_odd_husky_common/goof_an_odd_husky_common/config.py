@@ -35,6 +35,17 @@ MAX_V: float = 0.5
 MAX_A: float = 0.05
 INITIAL_STEP: float = 1.8
 
+TEB_WEIGHTS: dict[str, float] = {
+    "velocity": 30.0,
+    "angular_velocity": 30.0,
+    "acceleration": 30.0,
+    "angular_acceleration": 30.0,
+    "kinematic": 1000.0,
+    "time": 1.0,
+    "circle_obstacles": 200.0,
+    "line_obstacles": 400.0,
+}
+TRAJECTORY_LIMITS: tuple[float, float] = (0.5, 2.0)
 SOFTMIN_ALPHA: float = -7.0 # SegmentLineObstaclesCost softmin
 
 BARRIER_OFFSET: float = 2

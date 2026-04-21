@@ -73,6 +73,8 @@ class TEBPlanner(TrajectoryPlanner):
     initial_step: float
     safety_radius: float
     softmin_alpha: float
+    trajectory_limits: tuple[float, float]
+    weights: dict[str, float]
     traj: TrajectoryState
 
     def __init__(
@@ -84,6 +86,8 @@ class TEBPlanner(TrajectoryPlanner):
         initial_step: float,
         safety_radius: float,
         softmin_alpha: float,
+        trajectory_limits: tuple[float, float],
+        weights: dict[str, float]
     ) -> None:
         """Initializes the TEBPlanner.
 
@@ -94,7 +98,9 @@ class TEBPlanner(TrajectoryPlanner):
             max_a: Maximum linear acceleration.
             initial_step: Initial spacing distance for trajectory points.
             safety_radius: Minimum allowable distance to obstacles.
-            softmin_alpha: A value used in softmin, which replaces min to avoid non-smooth jacobians
+            softmin_alpha: A value used in softmin, which replaces min to avoid non-smooth jacobians.
+            trajectory_limits: A tuple of lower and upper limits on edge size.
+            weights: A dictionary of weights for each cost.
         """
         self.setup_poses(start_pose, goal_pose)
         self.max_v = max_v
@@ -102,6 +108,8 @@ class TEBPlanner(TrajectoryPlanner):
         self.initial_step = initial_step
         self.safety_radius = safety_radius
         self.softmin_alpha = softmin_alpha
+        self.trajectory_limits = trajectory_limits
+        self.weights = weights
         self.traj = TrajectoryState()
 
     @override
@@ -342,7 +350,7 @@ class TEBPlanner(TrajectoryPlanner):
         if not self.traj:
             return False
 
-        self.resize_trajectory(0.5, 2.0)
+        self.resize_trajectory(*self.trajectory_limits)
 
         if len(self.traj) <= 2:
             return False
@@ -356,24 +364,24 @@ class TEBPlanner(TrajectoryPlanner):
         start_vx = current_velocity * np.cos(start_theta).item()
         start_vy = current_velocity * np.sin(start_theta).item()
 
-        velocity_cost = SegmentVelocityCost(weight=30.0, max_v=self.max_v)
+        velocity_cost = SegmentVelocityCost(weight=self.weights["velocity"], max_v=self.max_v)
         angular_velocity_cost = SegmentAngularVelocityCost(
-            weight=30.0, max_omega=self.max_v / 2
+            weight=self.weights["angular_velocity"], max_omega=self.max_v / 2
         )
-        acceleration_cost = SegmentAccelerationCost(weight=30.0, max_a=self.max_a)
+        acceleration_cost = SegmentAccelerationCost(weight=self.weights["acceleration"], max_a=self.max_a)
         angular_acceleration_cost = SegmentAngularAccelerationCost(
-            weight=30.0, max_alpha=self.max_a / 3
+            weight=self.weights["angular_acceleration"], max_alpha=self.max_a / 3
         )
         start_acceleration_cost = StartAccelerationCost(
-            weight=30.0, max_a=self.max_a, current_v=(start_vx, start_vy)
+            weight=self.weights["acceleration"], max_a=self.max_a, current_v=(start_vx, start_vy)
         )
         start_angular_acceleration_cost = StartAngularAccelerationCost(
-            weight=30.0, max_alpha=self.max_a / 3, current_omega=current_omega
+            weight=self.weights["angular_acceleration"], max_alpha=self.max_a / 3, current_omega=current_omega
         )
-        kinematic_cost = SegmentKinematicsCost(weight=1000.0)
+        kinematic_cost = SegmentKinematicsCost(weight=self.weights["kinematic"])
         heading_cost = SegmentHeadingCost(weight=5.0)
         angular_smoothing_cost = SegmentAngularSmoothingCost(weight=1.0)
-        time_cost = SegmentTimeCost(weight=1.0)
+        time_cost = SegmentTimeCost(weight=self.weights["time"])
 
         obstacle_filter = ObstacleFilter(
             circle_obstacles, line_obstacles, self.safety_radius * 1.8
@@ -395,7 +403,7 @@ class TEBPlanner(TrajectoryPlanner):
             )
             if close_circles:
                 circle_obstacles_cost = SegmentCircleObstaclesCost(
-                    close_circles, weight=200.0, safety_radius=self.safety_radius
+                    close_circles, weight=self.weights["circle_obstacles"], safety_radius=self.safety_radius
                 )
                 self._keep_alive.append(circle_obstacles_cost)
                 problem.add_residual_block(
@@ -409,7 +417,7 @@ class TEBPlanner(TrajectoryPlanner):
             )
             if close_lines:
                 line_obstacles_cost = SegmentLineObstaclesCost(
-                    close_lines, weight=200.0, safety_radius=self.safety_radius, softmin_alpha=self.softmin_alpha
+                    close_lines, weight=self.weights["line_obstacles"], safety_radius=self.safety_radius, softmin_alpha=self.softmin_alpha
                 )
                 self._keep_alive.append(line_obstacles_cost)
                 problem.add_residual_block(

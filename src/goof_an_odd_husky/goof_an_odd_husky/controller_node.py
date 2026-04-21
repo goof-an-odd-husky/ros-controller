@@ -31,6 +31,8 @@ from goof_an_odd_husky_common.config import (
     MIN_SCAN_RANGE,
     MEDIAN_FILTER_SIZE,
     SOFTMIN_ALPHA,
+    TRAJECTORY_LIMITS,
+    TEB_WEIGHTS,
 )
 from goof_an_odd_husky_common.helpers import (
     quat_to_yaw,
@@ -260,6 +262,8 @@ class ControllerNode(Node):
             initial_step=INITIAL_STEP,
             safety_radius=SAFETY_RADIUS,
             softmin_alpha=SOFTMIN_ALPHA,
+            trajectory_limits=TRAJECTORY_LIMITS,
+            weights=TEB_WEIGHTS,
         )
         self.needs_initial_plan = False
         self.needs_astar_plan = False
@@ -305,6 +309,8 @@ class ControllerNode(Node):
                 initial_step=INITIAL_STEP,
                 safety_radius=SAFETY_RADIUS,
                 softmin_alpha=SOFTMIN_ALPHA,
+                trajectory_limits=TRAJECTORY_LIMITS,
+                weights=TEB_WEIGHTS,
             )
             self.needs_initial_plan = True
 

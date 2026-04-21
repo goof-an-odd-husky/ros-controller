@@ -4,7 +4,6 @@ import numpy as np
 from rclpy.impl.rcutils_logger import RcutilsLogger
 from goof_an_odd_husky.local_navigation.safety import is_point_safe
 from goof_an_odd_husky_common.obstacles import Obstacle, LineObstacle
-from goof_an_odd_husky_common.config import SAFETY_RADIUS
 from shapely.geometry import LineString, Point
 
 
@@ -18,16 +17,19 @@ class LocalGoalSelector:
 
     max_trajectory_distance: float
     logger: RcutilsLogger
+    safety_flags: float
 
-    def __init__(self, max_trajectory_distance: float, logger: RcutilsLogger) -> None:
+    def __init__(self, max_trajectory_distance: float, logger: RcutilsLogger, safety_radius: float) -> None:
         """Initialize the LocalGoalSelector.
 
         Args:
             max_trajectory_distance: Dist in meters defining the lookahead horizon.
             logger: ROS 2 logger instance.
+            safety_radius: The radius around obstacles, inside which a goal can't be placed.
         """
         self.max_trajectory_distance = max_trajectory_distance
         self.logger = logger
+        self.safety_radius = safety_radius
 
     def _transform_point_to_local(
         self,
@@ -134,7 +136,7 @@ class LocalGoalSelector:
         )
 
         if not is_point_safe(
-            local_x, local_y, detected_obstacles, margin=SAFETY_RADIUS
+            local_x, local_y, detected_obstacles, margin=self.safety_radius,
         ):
             max_search_offset = 8
             found_safe = False
@@ -149,7 +151,7 @@ class LocalGoalSelector:
                         vehicle_y,
                         yaw,
                     )
-                    if is_point_safe(lx, ly, detected_obstacles, margin=SAFETY_RADIUS):
+                    if is_point_safe(lx, ly, detected_obstacles, margin=self.safety_radius):
                         target_idx = idx_ahead
                         local_x, local_y = lx, ly
                         found_safe = True
@@ -167,7 +169,7 @@ class LocalGoalSelector:
                             yaw,
                         )
                         if is_point_safe(
-                            lx, ly, detected_obstacles, margin=SAFETY_RADIUS
+                            lx, ly, detected_obstacles, margin=self.safety_radius
                         ):
                             target_idx = idx_behind
                             local_x, local_y = lx, ly
@@ -187,7 +189,7 @@ class LocalGoalSelector:
                     yaw,
                 )
                 if is_point_safe(
-                    lx_closest, ly_closest, detected_obstacles, margin=SAFETY_RADIUS
+                    lx_closest, ly_closest, detected_obstacles, margin=self.safety_radius
                 ):
                     local_x, local_y = lx_closest, ly_closest
                     target_idx = closest_idx

@@ -7,11 +7,6 @@ from sensor_msgs.msg import LaserScan
 from scipy.ndimage import median_filter
 
 from goof_an_odd_husky_common.helpers import point_segment_distance, segments_intersect
-from goof_an_odd_husky_common.config import (
-    MIN_CIRCLE_RADIUS,
-    MAX_CIRCLE_RADIUS,
-    MAX_LINE_DISTANCE,
-)
 from goof_an_odd_husky_common.obstacles import Obstacle, CircleObstacle, LineObstacle
 
 
@@ -181,6 +176,9 @@ class ObstaclePipeline:
         geometry_split_threshold: float,
         min_range: float,
         median_filter_size: int,
+        min_circle_radius: float,
+        max_circle_radius: float,
+        max_line_distance: float,
     ):
         """Initialize pipeline parameters.
 
@@ -189,13 +187,16 @@ class ObstaclePipeline:
             geometry_split_threshold: Clusters larger than this are fitted as lines.
             min_range: Minimum distance from sensor; points closer than this value (in meters) are filtered out.
             median_filter_size: The window size for median filter run on a scan.
+            min_circle_radius: The lower bound for the circle obstacles.
+            max_circle_radius: The upper bound for the circle obstacles.
+            max_line_distance: The upper bound before a line is split in two.
         """
         self.cluster_break_distance = cluster_break_distance
         self.geometry_split_threshold = geometry_split_threshold
         self.min_range = min_range
         self.median_filter_size = median_filter_size
-        self.circle_extractor = CircleExtractor(MIN_CIRCLE_RADIUS, MAX_CIRCLE_RADIUS)
-        self.line_extractor = LineExtractor(MAX_LINE_DISTANCE)
+        self.circle_extractor = CircleExtractor(min_circle_radius, max_circle_radius)
+        self.line_extractor = LineExtractor(max_line_distance)
 
     def process(self, scan_msg: LaserScan, is_sim: bool = True) -> list[Obstacle]:
         points = self._scan_to_cartesian(scan_msg, not is_sim)

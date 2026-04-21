@@ -2,7 +2,6 @@ import math
 import networkx as nx
 from goof_an_odd_husky_common.obstacles import Obstacle, CircleObstacle, LineObstacle
 from goof_an_odd_husky.local_navigation.safety import is_point_safe, is_segment_safe
-from goof_an_odd_husky_common.config import SAFETY_RADIUS
 
 CIRCLE_BYPASS_SAMPLES = 8
 
@@ -48,7 +47,7 @@ def astar_visibility_path(
     start_xy: tuple[float, float],
     goal_xy: tuple[float, float],
     obstacles: list[Obstacle],
-    safety_radius: float = SAFETY_RADIUS,
+    safety_radius: float,
 ) -> list[tuple[float, float]] | None:
     """Finds a collision-free path using A* search on an obstacle visibility graph.
 

@@ -4,7 +4,6 @@ import networkx as nx
 import numpy as np
 from scipy.spatial import cKDTree
 
-from goof_an_odd_husky_common.config import MAX_PATH_EDGE
 from goof_an_odd_husky_common.helpers import coords_distance
 from goof_an_odd_husky_common.types import GpsCoord
 
@@ -53,13 +52,14 @@ def stitch_path_coords(G: nx.MultiDiGraph, path: list[int]) -> list[GpsCoord]:
     return stitched
 
 
-def slice_path(path: list[GpsCoord]) -> list[GpsCoord]:
+def slice_path(path: list[GpsCoord], max_path_edge: float) -> list[GpsCoord]:
     """Interpolate additional points on long straight path segments.
 
-    Ensures no two sequential points are farther apart than MAX_PATH_EDGE meters.
+    Ensures no two sequential points are farther apart than max_path_edge meters.
 
     Args:
         path: A list of GpsCoord points.
+        max_path_edge: The max length of each of the edges in the initial sequence.
 
     Returns:
         list[GpsCoord]: The newly densified coordinate list.
@@ -69,9 +69,9 @@ def slice_path(path: list[GpsCoord]) -> list[GpsCoord]:
         u, v = path[i], path[i + 1]
         dist = coords_distance(u, v)
         sliced.append(u)
-        if dist <= MAX_PATH_EDGE:
+        if dist <= max_path_edge:
             continue
-        slices = int(round(dist / MAX_PATH_EDGE))
+        slices = int(round(dist / max_path_edge))
         for k in range(1, slices):
             t = k / slices
             sliced.append(

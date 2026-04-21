@@ -33,6 +33,10 @@ from goof_an_odd_husky_common.config import (
     SOFTMIN_ALPHA,
     TRAJECTORY_LIMITS,
     TEB_WEIGHTS,
+    OSM_RELATION_ID,
+    MIN_CIRCLE_RADIUS,
+    MAX_CIRCLE_RADIUS,
+    MAX_LINE_DISTANCE,
 )
 from goof_an_odd_husky_common.helpers import (
     quat_to_yaw,
@@ -269,16 +273,23 @@ class ControllerNode(Node):
         self.needs_astar_plan = False
 
         self.path_manager = GlobalPathManager(
-            use_gps=self.use_gps, logger=self.get_logger()
+            use_gps=self.use_gps,
+            logger=self.get_logger(),
+            osm_relation_id=OSM_RELATION_ID,
         )
         self.goal_selector = LocalGoalSelector(
-            max_trajectory_distance=MAX_TRAJECTORY_DISTANCE, logger=self.get_logger()
+            max_trajectory_distance=MAX_TRAJECTORY_DISTANCE,
+            logger=self.get_logger(),
+            safety_radius=SAFETY_RADIUS,
         )
         self.obstacle_pipeline = ObstaclePipeline(
             CLUSTER_BREAK_DISTANCE,
             GEOMETRY_SPLIT_THRESHOLD,
             MIN_SCAN_RANGE,
             MEDIAN_FILTER_SIZE,
+            MIN_CIRCLE_RADIUS,
+            MAX_CIRCLE_RADIUS,
+            MAX_LINE_DISTANCE,
         )
 
         self._publish_status("idle")
@@ -509,6 +520,7 @@ class ControllerNode(Node):
                     start_xy=(self.planner.start_pose[0], self.planner.start_pose[1]),
                     goal_xy=(local_goal[0], local_goal[1]),
                     obstacles=detected_obstacles,
+                    safety_radius=SAFETY_RADIUS,
                 )
                 self.needs_astar_plan = False
 

@@ -13,7 +13,6 @@ from goof_an_odd_husky.global_navigation.routing import (
     stitch_path_coords,
     slice_path,
 )
-from goof_an_odd_husky_common.config import OSM_RELATION_ID
 from goof_an_odd_husky_common.helpers import gps_to_vector
 from goof_an_odd_husky_common.types import GpsCoord
 
@@ -46,17 +45,18 @@ class GlobalPathManager:
     goal: GpsCoord | None
     goal_reached: bool
 
-    def __init__(self, use_gps: bool, logger: RcutilsLogger) -> None:
+    def __init__(self, use_gps: bool, logger: RcutilsLogger, osm_relation_id: int) -> None:
         """Initialize the GlobalPathManager.
 
         Args:
             use_gps: Whether to load and use OSM graphs for GPS routing.
             logger: A ROS 2 logger instance.
+            osm_relation_id: The ID of the OSM relation, in which the navigation happens.
         """
         self.use_gps = use_gps
         self.logger = logger
         self.graph = (
-            filter_walkable_paved(load_graph_for_relation(OSM_RELATION_ID))
+            filter_walkable_paved(load_graph_for_relation(osm_relation_id))
             if use_gps
             else None
         )

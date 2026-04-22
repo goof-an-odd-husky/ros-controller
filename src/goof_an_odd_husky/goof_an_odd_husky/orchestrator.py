@@ -278,7 +278,7 @@ class NavigationOrchestrator:
         valid_ranges = [
             r
             for r in scan.ranges
-            if scan.range_min < r < scan.range_max and math.isfinite(r)
+            if max(scan.range_min, MIN_SCAN_RANGE) < r < scan.range_max and math.isfinite(r)
         ]
         if valid_ranges and min(valid_ranges) < CRITICAL_STOP_RADIUS:
             return f"Critical Zone Intrusion ({min(valid_ranges):.2f}m)"

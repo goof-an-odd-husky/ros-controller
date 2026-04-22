@@ -12,7 +12,7 @@ from goof_an_odd_husky_common.types import Pose2D, Trajectory
 from goof_an_odd_husky_common.obstacles import Obstacle, obstacles_to_msg
 
 
-class VisualizerCommunicator:
+class PublisherCommunicator:
     """Handles all ROS 2 publishers and message formatting for the navigation system.
 
     Attributes:
@@ -36,7 +36,7 @@ class VisualizerCommunicator:
     status_publisher: Publisher
 
     def __init__(self, node: Node) -> None:
-        """Initialize the VisualizerCommunicator with its publishers.
+        """Initialize the PublisherCommunicator with its publishers.
 
         Args:
             node: The ROS 2 node to attach publishers to.

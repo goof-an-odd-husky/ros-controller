@@ -20,7 +20,7 @@ from goof_an_odd_husky_common.types import GpsCoord
 from goof_an_odd_husky.performance_tracker import PerformanceTracker
 from goof_an_odd_husky.sensor_cache import SensorCache
 from goof_an_odd_husky.orchestrator import NavigationOrchestrator
-from goof_an_odd_husky.visualizer_communicator import VisualizerCommunicator
+from goof_an_odd_husky.publisher_communicator import PublisherCommunicator
 
 
 class ControllerNode(Node):
@@ -30,13 +30,13 @@ class ControllerNode(Node):
         use_gps: Whether to use GPS for navigation.
         sensor_cache: Thread-safe data storage for subscription data.
         orchestrator: The logic engine for processing navigation steps.
-        visualizer: Communicator for handling all ROS 2 publications.
+        publisher: Communicator for handling all ROS 2 publications.
     """
 
     use_gps: bool
     sensor_cache: SensorCache
     orchestrator: NavigationOrchestrator
-    visualizer: VisualizerCommunicator
+    publisher: PublisherCommunicator
 
     def __init__(self, use_gps: bool, debug: bool = False) -> None:
         """Initialize the ControllerNode.
@@ -55,7 +55,7 @@ class ControllerNode(Node):
         self.orchestrator = NavigationOrchestrator(
             use_gps=self.use_gps, logger=self.get_logger()
         )
-        self.visualizer = VisualizerCommunicator(self)
+        self.publisher = PublisherCommunicator(self)
 
         self.control_callback_group = MutuallyExclusiveCallbackGroup()
         self.lidar_cb_group = MutuallyExclusiveCallbackGroup()
@@ -112,7 +112,7 @@ class ControllerNode(Node):
             0.1, self.control_loop, callback_group=self.control_callback_group
         )
 
-        self.visualizer.publish_status("idle")
+        self.publisher.publish_status("idle")
 
     def heartbeat_callback(self, _: Empty) -> None:
         """Callback for the visualizer heartbeat to track UI connection status."""
@@ -123,7 +123,7 @@ class ControllerNode(Node):
         self.last_goal_stamp = msg.header.stamp
         self.orchestrator.set_goal(GpsCoord(msg.pose.position.x, msg.pose.position.y))
 
-        self.visualizer.publish_status("navigating")
+        self.publisher.publish_status("navigating")
         self.get_logger().info(
             f"New goal set: {msg.pose.position.x}, {msg.pose.position.y}"
         )
@@ -140,8 +140,8 @@ class ControllerNode(Node):
 
         self.orchestrator.cancel_goal()
 
-        self.visualizer.publish_velocity(0.0, 0.0)
-        self.visualizer.publish_status("idle")
+        self.publisher.publish_velocity(0.0, 0.0)
+        self.publisher.publish_status("idle")
         self.get_logger().info("Navigation cancelled")
 
     def lidar_callback(self, msg: LaserScan) -> None:
@@ -186,17 +186,17 @@ class ControllerNode(Node):
 
             performance.update("Publish/Finish")
 
-            self.visualizer.publish_robot_pose(
+            self.publisher.publish_robot_pose(
                 out.robot_pose
             ) if out.robot_pose else None
-            self.visualizer.publish_status(out.status) if out.status else None
-            self.visualizer.publish_global_path(out.global_path)
-            self.visualizer.publish_obstacles(out.obstacles)
-            self.visualizer.publish_trajectory(out.trajectory)
-            self.visualizer.publish_goal_local(out.goal_local)
+            self.publisher.publish_status(out.status) if out.status else None
+            self.publisher.publish_global_path(out.global_path)
+            self.publisher.publish_obstacles(out.obstacles)
+            self.publisher.publish_trajectory(out.trajectory)
+            self.publisher.publish_goal_local(out.goal_local)
 
             if out.v is not None and out.omega is not None:
-                self.visualizer.publish_velocity(out.v, out.omega)
+                self.publisher.publish_velocity(out.v, out.omega)
 
 
 def main(args=None) -> None:

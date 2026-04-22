@@ -196,7 +196,9 @@ class ControllerNode(Node):
             self.publisher.publish_goal_local(out.goal_local)
 
             if out.v is not None and out.omega is not None:
-                self.publisher.publish_velocity(out.v, out.omega)
+                self.publisher.publish_velocity(
+                    out.v, out.omega, self.get_clock().now().to_msg()
+                )
 
 
 def main(args=None) -> None:

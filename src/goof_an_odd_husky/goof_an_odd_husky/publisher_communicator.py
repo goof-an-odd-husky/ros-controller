@@ -3,6 +3,7 @@ from geometry_msgs.msg import TwistStamped, PoseStamped, PointStamped
 from nav_msgs.msg import Path
 from rclpy.publisher import Publisher
 from std_msgs.msg import String
+from builtin_interfaces.msg import Time
 from goof_an_odd_husky_msgs.msg import ObstacleArray
 
 from goof_an_odd_husky_common.config import TOPICS
@@ -42,24 +43,36 @@ class PublisherCommunicator:
             node: The ROS 2 node to attach publishers to.
         """
         self.node = node
-        self.velocity_publisher = node.create_publisher(TwistStamped, TOPICS["cmd_vel"], 10)
+        self.velocity_publisher = node.create_publisher(
+            TwistStamped, TOPICS["cmd_vel"], 10
+        )
         self.pose_publisher = node.create_publisher(PoseStamped, "/viz/robot_pose", 10)
         self.trajectory_publisher = node.create_publisher(Path, "/viz/trajectory", 10)
-        self.global_path_publisher = node.create_publisher(Path, "/viz/global_path", LATCHED_QOS)
-        self.obstacles_publisher = node.create_publisher(ObstacleArray, "/viz/obstacles", 10)
-        self.goal_local_publisher = node.create_publisher(PointStamped, "/viz/goal_local", 10)
-        self.status_publisher = node.create_publisher(String, "/nav/status", LATCHED_QOS)
+        self.global_path_publisher = node.create_publisher(
+            Path, "/viz/global_path", LATCHED_QOS
+        )
+        self.obstacles_publisher = node.create_publisher(
+            ObstacleArray, "/viz/obstacles", 10
+        )
+        self.goal_local_publisher = node.create_publisher(
+            PointStamped, "/viz/goal_local", 10
+        )
+        self.status_publisher = node.create_publisher(
+            String, "/nav/status", LATCHED_QOS
+        )
 
-    def publish_velocity(self, v: float, omega: float) -> None:
+    def publish_velocity(self, v: float, omega: float, stamp: Time) -> None:
         """Publish the velocity command to the robot base.
 
         Args:
             v: Linear velocity in m/s.
             omega: Angular velocity in rad/s.
+            stamp: Current time stamp.
         """
         msg = TwistStamped()
         msg.twist.linear.x = float(v)
         msg.twist.angular.z = float(omega)
+        msg.header.stamp = stamp
         self.velocity_publisher.publish(msg)
 
     def publish_status(self, status: str) -> None:

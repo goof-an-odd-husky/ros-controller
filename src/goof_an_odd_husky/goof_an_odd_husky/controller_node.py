@@ -166,8 +166,9 @@ class ControllerNode(Node):
             performance.update("Data acquisition")
 
             scan_age_sec = None
+            current_time = self.get_clock().now()
             if scan_time is not None:
-                scan_age_sec = (self.get_clock().now() - scan_time).nanoseconds / 1e9
+                scan_age_sec = (current_time - scan_time).nanoseconds / 1e9
 
             out = self.orchestrator.step(
                 odom_g=odom,
@@ -175,6 +176,7 @@ class ControllerNode(Node):
                 scan_age_sec=scan_age_sec,
                 gps_data=gps,
                 first_gps=self.sensor_cache.get_first_gps(),
+                current_time_sec=current_time.nanoseconds / 1e9,
                 visualizer_alive=self.sensor_cache.is_visualizer_alive(
                     self.get_clock().now(), HEARTBEAT_TIMEOUT_SEC
                 ),

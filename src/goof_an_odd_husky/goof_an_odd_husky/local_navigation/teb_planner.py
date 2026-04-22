@@ -62,6 +62,7 @@ class TEBPlanner(TrajectoryPlanner):
 
     Attributes:
         max_v: Maximum linear velocity allowed.
+        max_omega: Maximum angular velocity allowed.
         max_a: Maximum linear acceleration allowed.
         initial_step: Initial distance between trajectory nodes.
         safety_radius: Buffer added around obstacles during optimization.
@@ -69,6 +70,7 @@ class TEBPlanner(TrajectoryPlanner):
     """
 
     max_v: float
+    max_omega: float
     max_a: float
     initial_step: float
     safety_radius: float
@@ -82,6 +84,7 @@ class TEBPlanner(TrajectoryPlanner):
         start_pose: NDArray[np.floating] | list[float],
         goal_pose: NDArray[np.floating] | list[float],
         max_v: float,
+        max_omega: float,
         max_a: float,
         initial_step: float,
         safety_radius: float,
@@ -95,6 +98,7 @@ class TEBPlanner(TrajectoryPlanner):
             start_pose: Starting pose [x, y, theta].
             goal_pose: Goal pose [x, y, theta].
             max_v: Maximum linear velocity.
+            max_omega: Maximum angular velocity.
             max_a: Maximum linear acceleration.
             initial_step: Initial spacing distance for trajectory points.
             safety_radius: Minimum allowable distance to obstacles.
@@ -104,6 +108,7 @@ class TEBPlanner(TrajectoryPlanner):
         """
         self.setup_poses(start_pose, goal_pose)
         self.max_v = max_v
+        self.max_omega = max_omega
         self.max_a = max_a
         self.initial_step = initial_step
         self.safety_radius = safety_radius
@@ -366,7 +371,7 @@ class TEBPlanner(TrajectoryPlanner):
 
         velocity_cost = SegmentVelocityCost(weight=self.weights["velocity"], max_v=self.max_v)
         angular_velocity_cost = SegmentAngularVelocityCost(
-            weight=self.weights["angular_velocity"], max_omega=self.max_v / 2
+            weight=self.weights["angular_velocity"], max_omega=self.max_omega,
         )
         acceleration_cost = SegmentAccelerationCost(weight=self.weights["acceleration"], max_a=self.max_a)
         angular_acceleration_cost = SegmentAngularAccelerationCost(

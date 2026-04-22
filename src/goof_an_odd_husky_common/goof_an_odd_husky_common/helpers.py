@@ -163,6 +163,21 @@ def segments_intersect(
     return np.logical_and(diff_side_CD, diff_side_AB)
 
 
+def quat_to_euler(qx: float, qy: float, qz: float, qw: float) -> tuple[float, float, float]:
+    """Convert a quaternion into euler angles (roll, pitch, yaw) in radians.
+
+    Args:
+        qx: Quaternion X component.
+        qy: Quaternion Y component.
+        qz: Quaternion Z component.
+        qw: Quaternion W component (scalar part).
+
+    Returns:
+        tuple[float, float, float]: Angle in radians.
+    """
+    return tuple(Rotation.from_quat([qx, qy, qz, qw]).as_euler("xyz"))
+
+
 def quat_to_yaw(qx: float, qy: float, qz: float, qw: float) -> float:
     """Convert a quaternion to a yaw angle (Z-axis rotation).
 
@@ -176,7 +191,7 @@ def quat_to_yaw(qx: float, qy: float, qz: float, qw: float) -> float:
         float: Yaw angle in radians (rotation about Z-axis, intrinsic rotation
             sequence ZYX).
     """
-    return Rotation.from_quat([qx, qy, qz, qw]).as_euler("zyx")[0]
+    return quat_to_euler(qx, qy, qz, qw)[2]
 
 
 def yaw_to_quat(yaw: float) -> NDArray[np.float64]:

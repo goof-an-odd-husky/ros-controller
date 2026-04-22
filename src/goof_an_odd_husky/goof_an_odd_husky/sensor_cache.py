@@ -1,6 +1,6 @@
 import threading
 import rclpy.time
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import LaserScan, Imu
 from nav_msgs.msg import Odometry
 from goof_an_odd_husky_common.types import GpsCoord
 
@@ -95,7 +95,9 @@ class SensorCache:
         with self._lock:
             self.last_heartbeat_time = time
 
-    def is_visualizer_alive(self, current_time: rclpy.time.Time, timeout_sec: float) -> bool:
+    def is_visualizer_alive(
+        self, current_time: rclpy.time.Time, timeout_sec: float
+    ) -> bool:
         """Check if the external visualizer is still active.
 
         Args:
@@ -111,7 +113,9 @@ class SensorCache:
             elapsed = (current_time - self.last_heartbeat_time).nanoseconds / 1e9
             return elapsed < timeout_sec
 
-    def get_core_sensors(self) -> tuple[
+    def get_core_sensors(
+        self,
+    ) -> tuple[
         Odometry | None, LaserScan | None, rclpy.time.Time | None, GpsCoord | None
     ]:
         """Returns a snapshot of the core navigation data safely.

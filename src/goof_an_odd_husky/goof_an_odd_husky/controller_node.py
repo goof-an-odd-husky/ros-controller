@@ -140,7 +140,7 @@ class ControllerNode(Node):
 
         self.orchestrator.cancel_goal()
 
-        self.publisher.publish_velocity(0.0, 0.0)
+        self.publisher.publish_velocity(0.0, 0.0, self.get_clock().now().to_msg())
         self.publisher.publish_status("idle")
         self.get_logger().info("Navigation cancelled")
 

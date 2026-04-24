@@ -1,7 +1,7 @@
 import math
 import networkx as nx
 from goof_an_odd_husky_common.obstacles import Obstacle, CircleObstacle, LineObstacle
-from goof_an_odd_husky.local_navigation.safety import is_point_safe, is_segment_safe
+from goof_an_odd_husky.local_navigation.safety import is_point_safe, is_segment_safe, is_start_segment_safe
 
 CIRCLE_BYPASS_SAMPLES = 8
 
@@ -68,6 +68,12 @@ def astar_visibility_path(
         Ordered list of (x, y) waypoints from start to goal inclusive, or None
         if no collision-free path exists within the visibility graph.
     """
+    if not is_point_safe(goal_xy[0], goal_xy[1], obstacles, safety_radius):
+        return None
+
+    if not is_point_safe(start_xy[0], start_xy[1], obstacles, margin=0.01):
+        return None
+
     clearance = safety_radius + 0.05
 
     safe_nodes = [
@@ -82,10 +88,24 @@ def astar_visibility_path(
 
     for i, (x1, y1) in enumerate(all_nodes):
         for j, (x2, y2) in enumerate(all_nodes[i + 1 :], start=i + 1):
-            if is_segment_safe(x1, y1, x2, y2, obstacles, safety_radius):
-                G.add_edge(
-                    all_nodes[i], all_nodes[j], weight=math.hypot(x2 - x1, y2 - y1)
-                )
+            node1 = all_nodes[i]
+            node2 = all_nodes[j]
+            
+            if node1 == start_xy:
+                is_safe = is_start_segment_safe(x1, y1, x2, y2, obstacles, safety_radius)
+            elif node2 == start_xy:
+                is_safe = is_start_segment_safe(x2, y2, x1, y1, obstacles, safety_radius)
+            else:
+                is_safe = is_segment_safe(x1, y1, x2, y2, obstacles, safety_radius)
+
+            if is_safe:
+                G.add_edge(node1, node2, weight=math.hypot(x2 - x1, y2 - y1))
+
+    if G.degree(start_xy) == 0:
+        raise RuntimeError(
+            f"A* Error: Start node {start_xy} is unsafe, and the improved safety check "
+            "could not find any valid trajectories moving away from the obstacles."
+        )
 
     try:
         return nx.astar_path(

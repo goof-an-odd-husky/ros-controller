@@ -38,6 +38,7 @@ from goof_an_odd_husky_common.config import (
     MAX_ODOM_JUMP_SPEED_ANGULAR,
     MAX_ESTOP_V,
     MAX_ESTOP_OMEGA,
+    MAX_PATH_EDGE,
 )
 from goof_an_odd_husky_common.helpers import quat_to_yaw, quat_to_euler
 from goof_an_odd_husky_common.types import Pose2D, Trajectory, GpsCoord
@@ -279,7 +280,8 @@ class NavigationOrchestrator:
         valid_ranges = [
             r
             for r in scan.ranges
-            if max(scan.range_min, MIN_SCAN_RANGE) < r < scan.range_max and math.isfinite(r)
+            if max(scan.range_min, MIN_SCAN_RANGE) < r < scan.range_max
+            and math.isfinite(r)
         ]
         if valid_ranges and min(valid_ranges) < CRITICAL_STOP_RADIUS:
             return f"Critical Zone Intrusion ({min(valid_ranges):.2f}m)"
@@ -425,7 +427,9 @@ class NavigationOrchestrator:
             self.logger.warn("Waiting for GPS anchor...", throttle_duration_sec=2.0)
             return out
 
-        self.path_manager.generate_path(gps_data, robot_pose.x, robot_pose.y)
+        self.path_manager.generate_path(
+            gps_data, robot_pose.x, robot_pose.y, MAX_PATH_EDGE
+        )
 
         if self.path_manager.check_goal_reached(robot_pose.x, robot_pose.y):
             self.logger.info("Goal reached!", throttle_duration_sec=2.0)
@@ -451,6 +455,7 @@ class NavigationOrchestrator:
             return out
 
         local_goal, new_closest_idx, target_idx = selection
+        physical_obstacles = detected_obstacles
         if self.use_gps:
             corridor_line_obstacles = self.goal_selector.generate_corridor_barriers(
                 path=self.path_manager.get_local_path_snapshot(),
@@ -461,8 +466,11 @@ class NavigationOrchestrator:
                 yaw=robot_pose.theta,
                 barrier_offset=BARRIER_OFFSET,
             )
-            detected_obstacles.extend(corridor_line_obstacles[0])
-            detected_obstacles.extend(corridor_line_obstacles[1])
+            detected_obstacles = (
+                physical_obstacles
+                + corridor_line_obstacles[0]
+                + corridor_line_obstacles[1]
+            )
 
         out.obstacles = detected_obstacles
         self.path_manager.update_current_index(new_closest_idx)
@@ -475,7 +483,7 @@ class NavigationOrchestrator:
             astar_waypoints = astar_visibility_path(
                 start_xy=(self.planner.start_pose[0], self.planner.start_pose[1]),
                 goal_xy=(local_goal[0], local_goal[1]),
-                obstacles=detected_obstacles,
+                obstacles=physical_obstacles,
                 safety_radius=SAFETY_RADIUS,
             )
             if astar_waypoints is None:

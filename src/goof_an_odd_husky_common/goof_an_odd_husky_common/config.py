@@ -21,9 +21,9 @@ else:
 
 HEARTBEAT_TIMEOUT_SEC: float = 5.0
 
-# MAX_PATH_EDGE: int = 2
-MAX_TRAJECTORY_DISTANCE: int = 7
-SAFETY_RADIUS: float = 1.3
+MAX_PATH_EDGE: float = 2.0
+MAX_TRAJECTORY_DISTANCE: float = 7
+SAFETY_RADIUS: float = 2.0
 
 MIN_CIRCLE_RADIUS: float = 0.2
 MAX_CIRCLE_RADIUS: float = 3.5
@@ -54,16 +54,16 @@ TEB_WEIGHTS: dict[str, float] = {
 SOFTMIN_ALPHA: float = -7.0  # SegmentLineObstaclesCost softmin
 MAX_TEB_ITERATIONS: int = 5
 
-BARRIER_OFFSET: float = 2
+BARRIER_OFFSET: float = 3
 
 # E-Stop limits
-CRITICAL_STOP_RADIUS: float = 0.5
+CRITICAL_STOP_RADIUS: float = 0.7
 MAX_PITCH: float = math.radians(15)
 MAX_ROLL: float = math.radians(15)
 STUCK_TIMEOUT: float = 4.0
 STUCK_VEL_TOLERANCE: float = 0.05
 MAX_CROSS_TRACK_ERROR: float = 5.5
-TRAJECTORY_COLLISION_LOOKAHEAD: int = 5
+TRAJECTORY_COLLISION_LOOKAHEAD: int = 4
 MAX_ODOM_JUMP_SPEED_LINEAR: float = 3.0
 MAX_ODOM_JUMP_SPEED_ANGULAR: float = 3.0
 MAX_ESTOP_V: float = 1.5

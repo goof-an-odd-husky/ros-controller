@@ -45,7 +45,9 @@ class GlobalPathManager:
     goal: GpsCoord | None
     goal_reached: bool
 
-    def __init__(self, use_gps: bool, logger: RcutilsLogger, osm_relation_id: int) -> None:
+    def __init__(
+        self, use_gps: bool, logger: RcutilsLogger, osm_relation_id: int
+    ) -> None:
         """Initialize the GlobalPathManager.
 
         Args:
@@ -123,7 +125,11 @@ class GlobalPathManager:
             self.global_path_local = updated_path
 
     def generate_path(
-        self, gps_anchor: GpsCoord | None, vehicle_x: float, vehicle_y: float
+        self,
+        gps_anchor: GpsCoord | None,
+        vehicle_x: float,
+        vehicle_y: float,
+        max_path_edge: float,
     ) -> None:
         """Generate a new global path to the goal.
 
@@ -131,6 +137,7 @@ class GlobalPathManager:
             gps_anchor: The current GPS position to anchor path generation, or None.
             vehicle_x: Vehicle's X coordinate (used for non-GPS straight line fallback).
             vehicle_y: Vehicle's Y coordinate (used for non-GPS straight line fallback).
+            max_path_edge: The max length of each of the edges in the initial sequence.
         """
         with self.lock:
             if not self.needs_global_path or self.goal is None:
@@ -147,7 +154,9 @@ class GlobalPathManager:
                     goal_coord,
                 )
                 path_coords = stitch_path_coords(G_ext, path_nodes)
-                new_global_path = [coord for coord in slice_path(path_coords)]
+                new_global_path = [
+                    coord for coord in slice_path(path_coords, max_path_edge)
+                ]
             else:
                 self.logger.info("Generating straight line global path (No GPS)...")
                 new_global_path = []

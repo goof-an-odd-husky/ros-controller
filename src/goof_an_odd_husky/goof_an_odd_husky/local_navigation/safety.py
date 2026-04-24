@@ -94,3 +94,64 @@ def is_segment_safe(
                 return False
 
     return True
+
+def is_start_segment_safe(
+    start_x: float,
+    start_y: float,
+    end_x: float,
+    end_y: float,
+    obstacles: list[Obstacle],
+    margin: float = 0.4,
+) -> bool:
+    """Checks if a line segment originating from the start node is safe.
+
+    If the start node is inside the obstacle margin, the segment is allowed 
+    only if it moves away from the obstacle.
+
+    Args:
+        start_x: X coordinate of the segment start point.
+        start_y: Y coordinate of the segment start point.
+        end_x: X coordinate of the segment end point.
+        end_y: Y coordinate of the segment end point.
+        obstacles: List of obstacles to check against.
+        margin: Minimum required clearance distance from any obstacle boundary.
+
+    Returns:
+        True if the segment does not intersect any obstacle and maintains at
+        least `margin` distance from all obstacle boundaries
+        or moves away from the obstacles, False otherwise.
+    """
+    for obs in obstacles:
+        if isinstance(obs, CircleObstacle):
+            d_seg, _, _, _ = point_segment_distance(obs.x, obs.y, start_x, start_y, end_x, end_y)
+            
+            if d_seg < obs.radius + margin:
+                d_start = math.hypot(start_x - obs.x, start_y - obs.y)
+                
+                if d_start <= obs.radius + 1e-5:
+                    return False
+                    
+                if d_seg < d_start - 1e-5:
+                    return False
+
+        elif isinstance(obs, LineObstacle):
+            if segments_intersect(start_x, start_y, end_x, end_y, obs.x1, obs.y1, obs.x2, obs.y2):
+                return False
+                
+            d1, _, _, _ = point_segment_distance(start_x, start_y, obs.x1, obs.y1, obs.x2, obs.y2)
+            d2, _, _, _ = point_segment_distance(end_x, end_y, obs.x1, obs.y1, obs.x2, obs.y2)
+            d3, _, _, _ = point_segment_distance(obs.x1, obs.y1, start_x, start_y, end_x, end_y)
+            d4, _, _, _ = point_segment_distance(obs.x2, obs.y2, start_x, start_y, end_x, end_y)
+            
+            min_dist = min(d1, d2, d3, d4)
+            
+            if min_dist < margin:
+                d_start = d1
+                
+                if d_start <= 1e-5:
+                    return False
+                    
+                if min_dist < d_start - 1e-5:
+                    return False
+
+    return True

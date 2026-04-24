@@ -139,15 +139,30 @@ class SegmentLineObstaclesCost(pyceres.CostFunction):
                 + w4 * (-t4 * u4_y * inv_d4)
             )
 
+            AB_x = B_x - A_x
+            AB_y = B_y - A_y
+            len_AB = np.maximum(np.sqrt(AB_x**2 + AB_y**2), 1e-10)
+            
+            n_x = -AB_y / len_AB
+            n_y = AB_x / len_AB
+            
+            dot_A = gA_x_min * n_x + gA_y_min * n_y
+            gA_x_ortho = dot_A * n_x
+            gA_y_ortho = dot_A * n_y
+            
+            dot_B = gB_x_min * n_x + gB_y_min * n_y
+            gB_x_ortho = dot_B * n_x
+            gB_y_ortho = dot_B * n_y
+
             j_scaler = np.where(active_mask, -sqrt_w, 0.0)
 
             if jacobians[0] is not None:
                 jacobians[0][:] = np.vstack(
-                    (j_scaler * gA_x_min, j_scaler * gA_y_min)
+                    (j_scaler * gA_x_ortho, j_scaler * gA_y_ortho)
                 ).T.ravel()
             if jacobians[1] is not None:
                 jacobians[1][:] = np.vstack(
-                    (j_scaler * gB_x_min, j_scaler * gB_y_min)
+                    (j_scaler * gB_x_ortho, j_scaler * gB_y_ortho)
                 ).T.ravel()
 
         return True

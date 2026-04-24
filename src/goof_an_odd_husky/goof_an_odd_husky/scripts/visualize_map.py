@@ -10,7 +10,7 @@ from goof_an_odd_husky.global_navigation.routing import (
     stitch_path_coords,
     slice_path,
 )
-from goof_an_odd_husky_common.config import OSM_RELATION_ID
+from goof_an_odd_husky_common.config import OSM_RELATION_ID, MAX_PATH_EDGE
 from goof_an_odd_husky.global_navigation.graph import (
     load_graph_for_relation,
     filter_walkable_paved,
@@ -101,7 +101,7 @@ def _draw_path(
         for i in range(len(path) - 1)
     )
 
-    coords = slice_path(stitch_path_coords(path_graph, path))
+    coords = slice_path(stitch_path_coords(path_graph, path), MAX_PATH_EDGE)
 
     folium.PolyLine(
         locations=[(c.lat, c.lon) for c in coords],

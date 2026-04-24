@@ -1,4 +1,6 @@
 import math
+import json
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -115,6 +117,16 @@ class NavigationOrchestrator:
     last_cmd_omega: float
     mismatch_start_time: float | None
 
+    is_navigating: bool
+    nav_start_time: float
+    actual_path_length: float
+    global_path_length: float
+    last_pose_for_metrics: tuple[float, float] | None
+    metrics_file: str | None
+    metrics_data: dict
+    last_step_time_sec: float
+    step_counter: int
+
     def __init__(self, use_gps: bool, logger: RcutilsLogger) -> None:
         """Initialize the NavigationOrchestrator.
 
@@ -168,6 +180,16 @@ class NavigationOrchestrator:
         self.last_cmd_omega = 0.0
         self.mismatch_start_time = None
 
+        self.is_navigating = False
+        self.nav_start_time = 0.0
+        self.actual_path_length = 0.0
+        self.global_path_length = 0.0
+        self.last_pose_for_metrics = None
+        self.metrics_file = None
+        self.metrics_data = {}
+        self.last_step_time_sec = 0.0
+        self.step_counter = 0
+
     def set_goal(self, gps_coord: GpsCoord) -> None:
         """Configures the sub-systems for a newly requested global goal.
 
@@ -189,10 +211,50 @@ class NavigationOrchestrator:
         )
         self.needs_initial_plan = True
 
+        self.is_navigating = True
+        self.nav_start_time = 0.0
+        self.actual_path_length = 0.0
+        self.global_path_length = 0.0
+        self.last_pose_for_metrics = None
+        self.metrics_file = None
+        self.metrics_data = {
+            "elapsed_ms_history": [],
+            "control_frame_ms_history": []
+        }
+        self.step_counter = 0
+
     def cancel_goal(self) -> None:
         """Clears current paths and stops planning execution."""
+        if self.is_navigating:
+            self._dump_metrics(self.last_step_time_sec, status="cancelled")
+            self.is_navigating = False
+
         self.path_manager.cancel_goal()
         self.needs_initial_plan = False
+
+    def _dump_metrics(self, current_real_time_sec: float, status: str = "in_progress") -> None:
+        """Helper to compute statistics and save them dynamically into a JSON file."""
+        if not self.metrics_file:
+            return
+
+        total_time_s = current_real_time_sec - self.nav_start_time if self.nav_start_time > 0 else 0.0
+        efficiency = (self.global_path_length / self.actual_path_length) if self.actual_path_length > 0 else 0.0
+
+        self.metrics_data.update({
+            "status": status,
+            "nav_start_time": self.nav_start_time,
+            "last_update_time": current_real_time_sec,
+            "total_time_s": total_time_s,
+            "actual_path_length_m": self.actual_path_length,
+            "global_path_length_m": self.global_path_length,
+            "path_efficiency": efficiency,
+        })
+
+        try:
+            with open(self.metrics_file, 'w') as f:
+                json.dump(self.metrics_data, f, indent=4)
+        except Exception as e:
+            self.logger.error(f"Failed to dump metrics: {e}")
 
     def _log_missing_sensors(
         self, scan: LaserScan | None, odom: Odometry | None, gps: GpsCoord | None
@@ -371,6 +433,15 @@ class NavigationOrchestrator:
         """
         out = OrchestratorOutput()
 
+        control_frame_ms = 0.0
+        current_real_time_sec = time.perf_counter()
+        if self.last_step_time_sec > 0.0:
+            control_frame_ms = (current_real_time_sec - self.last_step_time_sec) * 1000.0
+        self.last_step_time_sec = current_real_time_sec
+
+        if self.is_navigating and control_frame_ms > 0.0:
+            self.metrics_data.setdefault("control_frame_ms_history", []).append(control_frame_ms)
+
         if scan is None or odom_g is None or (self.use_gps and gps_data is None):
             self._log_missing_sensors(scan, odom_g, gps_data)
             return out
@@ -389,6 +460,25 @@ class NavigationOrchestrator:
         out.robot_pose = robot_pose
 
         self._log_robot_location(robot_pose, gps_data)
+
+        if self.is_navigating:
+            if self.nav_start_time == 0.0:
+                self.nav_start_time = current_real_time_sec
+                self.metrics_file = f"nav_metrics_{int(self.nav_start_time)}.json"
+                self.last_pose_for_metrics = (robot_pose.x, robot_pose.y)
+
+            if self.last_pose_for_metrics is not None:
+                dx_m = robot_pose.x - self.last_pose_for_metrics[0]
+                dy_m = robot_pose.y - self.last_pose_for_metrics[1]
+                self.actual_path_length += math.hypot(dx_m, dy_m)
+            self.last_pose_for_metrics = (robot_pose.x, robot_pose.y)
+
+            elapsed_ms = (current_real_time_sec - self.nav_start_time) * 1000.0
+            self.metrics_data.setdefault("elapsed_ms_history", []).append(elapsed_ms)
+
+            self.step_counter += 1
+            if self.step_counter % 50 == 0:
+                self._dump_metrics(current_real_time_sec)
 
         estop_reason = self._check_emergency_stops(
             robot_pose,
@@ -431,10 +521,23 @@ class NavigationOrchestrator:
             gps_data, robot_pose.x, robot_pose.y, MAX_PATH_EDGE
         )
 
+        if self.is_navigating and self.global_path_length == 0.0:
+            snap = self.path_manager.get_local_path_snapshot()
+            if snap and len(snap) > 1:
+                path_len = 0.0
+                for i in range(len(snap) - 1):
+                    p1, p2 = snap[i], snap[i + 1]
+                    path_len += math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+                self.global_path_length = path_len
+                self._dump_metrics(current_real_time_sec)
+
         if self.path_manager.check_goal_reached(robot_pose.x, robot_pose.y):
             self.logger.info("Goal reached!", throttle_duration_sec=2.0)
             out.v, out.omega = 0.0, 0.0
             out.status = "goal_reached"
+            if self.is_navigating:
+                self._dump_metrics(current_real_time_sec, status="success")
+                self.is_navigating = False
             return out
 
         selection = self.goal_selector.select_local_goal(

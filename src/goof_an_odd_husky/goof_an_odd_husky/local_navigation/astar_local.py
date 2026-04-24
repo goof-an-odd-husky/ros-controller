@@ -102,10 +102,7 @@ def astar_visibility_path(
                 G.add_edge(node1, node2, weight=math.hypot(x2 - x1, y2 - y1))
 
     if G.degree(start_xy) == 0:
-        raise RuntimeError(
-            f"A* Error: Start node {start_xy} is unsafe, and the improved safety check "
-            "could not find any valid trajectories moving away from the obstacles."
-        )
+        return None
 
     try:
         return nx.astar_path(

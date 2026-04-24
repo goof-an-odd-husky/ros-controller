@@ -77,13 +77,25 @@ def is_segment_safe(
         True if the segment does not intersect any obstacle and maintains at
         least `margin` distance from all obstacle boundaries, False otherwise.
     """
+    min_x, max_x = min(x1, x2) - margin, max(x1, x2) + margin
+    min_y, max_y = min(y1, y2) - margin, max(y1, y2) + margin
+
     for obs in obstacles:
         if isinstance(obs, CircleObstacle):
+            if (max_x < obs.x - obs.radius or min_x > obs.x + obs.radius or 
+                max_y < obs.y - obs.radius or min_y > obs.y + obs.radius):
+                continue
             d, _, _, _ = point_segment_distance(obs.x, obs.y, x1, y1, x2, y2)
             if d < obs.radius + margin:
                 return False
 
         elif isinstance(obs, LineObstacle):
+            obs_min_x, obs_max_x = min(obs.x1, obs.x2), max(obs.x1, obs.x2)
+            obs_min_y, obs_max_y = min(obs.y1, obs.y2), max(obs.y1, obs.y2)
+            
+            if (max_x < obs_min_x or min_x > obs_max_x or 
+                max_y < obs_min_y or min_y > obs_max_y):
+                continue
             if segments_intersect(x1, y1, x2, y2, obs.x1, obs.y1, obs.x2, obs.y2):
                 return False
             d1, _, _, _ = point_segment_distance(x1, y1, obs.x1, obs.y1, obs.x2, obs.y2)

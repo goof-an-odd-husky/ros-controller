@@ -1,0 +1,30 @@
+services:
+  husky_viz:
+    build: .
+    image: husky-viz:latest
+    tty: true
+    stdin_open: true
+
+    network_mode: "host"
+    ipc: "host"
+    pid: "host"
+
+    security_opt:
+      - "seccomp:unconfined"
+      - "apparmor:unconfined"
+    cap_add:
+      - "SYS_PTRACE"
+
+    environment:
+      - DISPLAY
+      - XAUTHORITY=/root/.Xauthority
+      - QT_X11_NO_MITSHM=1
+
+    volumes:
+      - .:/workspace/goof-an-odd-husky
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:ro
+
+    working_dir: /workspace/goof-an-odd-husky
+
+    command: tail -f /dev/null

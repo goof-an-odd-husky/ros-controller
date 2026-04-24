@@ -3,7 +3,7 @@ import math
 USE_GPS: bool = False
 DEBUG: bool = True
 
-SIM: bool = True
+SIM: bool = False
 if SIM:
     TOPICS: dict[str, str] = {
         "cmd_vel": "/husky/cmd_vel",

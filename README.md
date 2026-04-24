@@ -28,7 +28,7 @@ Follow the guide to use nvidia inside the container https://docs.nvidia.com/data
 
 ## Real Husky
 
-Run `./init_husky.sh` and `./build.sh`
+Run `. init_husky.sh && ./build.sh`
 
 Run `ros2 launch ekf_launch.py`
 
@@ -40,9 +40,7 @@ Start: `./start.sh <path-to-husky-sim>` or `./start.sh` (if cloned into `../husk
 
 Then `docker exec -ti husky_dev bash`
 
-After starting the container for the first time run `./init.sh` from `/workspace/husky-sim`, then run `./init_docker.sh` and `./build.sh` from `/workspace/goof-an-odd-husky`
-
-Relaunch the shell
+After starting the container for the first time run `./init.sh` from `/workspace/husky-sim`, then run `. init_docker.sh && ./build.sh` from `/workspace/goof-an-odd-husky`
 
 To stop the container run `docker stop husky_dev` and `docker rm husky_dev`
 
@@ -52,8 +50,6 @@ Start: `docker compose up -d --build`
 
 Then `docker compose exec -ti husky_viz /bin/bash`
 
-After starting the container for the first time run `./init_docker.sh` and `./build_viz.sh` from `/workspace/goof-an-odd-husky`
-
-Relaunch the shell
+After starting the container for the first time run `. init_docker.sh && ./build_viz.sh` from `/workspace/goof-an-odd-husky`
 
 To stop the container run `docker compose down`

@@ -338,7 +338,7 @@ class TEBPlanner(TrajectoryPlanner):
     @override
     def refine(
         self,
-        iterations: int = 10,
+        iterations: int = 4,
         current_velocity: float = 0.0,
         current_omega: float = 0.0,
     ) -> bool:
@@ -486,7 +486,7 @@ class TEBPlanner(TrajectoryPlanner):
         options.gradient_tolerance = 1e-4
         options.parameter_tolerance = 1e-4
         options.num_threads = 1
-        options.linear_solver_type = pyceres.LinearSolverType.DENSE_NORMAL_CHOLESKY
+        options.linear_solver_type = pyceres.LinearSolverType.SPARSE_NORMAL_CHOLESKY
         options.minimizer_progress_to_stdout = False
 
         summary = pyceres.SolverSummary()

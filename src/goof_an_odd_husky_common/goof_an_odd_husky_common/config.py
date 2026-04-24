@@ -3,7 +3,7 @@ import math
 USE_GPS: bool = False
 DEBUG: bool = True
 
-SIM: bool = False
+SIM: bool = True
 if SIM:
     TOPICS: dict[str, str] = {
         "cmd_vel": "/husky/cmd_vel",
@@ -21,9 +21,9 @@ else:
 
 HEARTBEAT_TIMEOUT_SEC: float = 5.0
 
-MAX_PATH_EDGE: int = 2
+# MAX_PATH_EDGE: int = 2
 MAX_TRAJECTORY_DISTANCE: int = 7
-SAFETY_RADIUS: float = 1.0
+SAFETY_RADIUS: float = 1.3
 
 MIN_CIRCLE_RADIUS: float = 0.2
 MAX_CIRCLE_RADIUS: float = 3.5
@@ -36,7 +36,7 @@ MEDIAN_FILTER_SIZE: int = 3
 # TEB limits
 MAX_V: float = 0.5
 MAX_OMEGA: float = 0.75
-MAX_A: float = 0.05
+MAX_A: float = 0.1
 INITIAL_STEP: float = 1.8
 TRAJECTORY_LIMITS: tuple[float, float] = (0.5, 2.0)  # min and max sizes of a segment
 
@@ -52,6 +52,7 @@ TEB_WEIGHTS: dict[str, float] = {
     "line_obstacles": 400.0,
 }
 SOFTMIN_ALPHA: float = -7.0  # SegmentLineObstaclesCost softmin
+MAX_TEB_ITERATIONS: int = 5
 
 BARRIER_OFFSET: float = 2
 

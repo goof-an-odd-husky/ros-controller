@@ -1,6 +1,6 @@
 import threading
 import rclpy.time
-from sensor_msgs.msg import LaserScan, Imu
+from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 from goof_an_odd_husky_common.types import GpsCoord
 

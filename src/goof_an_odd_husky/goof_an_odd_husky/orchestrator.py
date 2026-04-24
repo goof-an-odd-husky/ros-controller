@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from rclpy.impl.rcutils_logger import RcutilsLogger
-from sensor_msgs.msg import LaserScan, Imu
+from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 
 from goof_an_odd_husky_common.config import (
@@ -22,6 +22,7 @@ from goof_an_odd_husky_common.config import (
     SOFTMIN_ALPHA,
     TRAJECTORY_LIMITS,
     TEB_WEIGHTS,
+    MAX_TEB_ITERATIONS,
     OSM_RELATION_ID,
     MIN_CIRCLE_RADIUS,
     MAX_CIRCLE_RADIUS,
@@ -486,6 +487,7 @@ class NavigationOrchestrator:
             self.needs_initial_plan = False
 
         self.planner.refine(
+            iterations=MAX_TEB_ITERATIONS,
             current_velocity=odom_g.twist.twist.linear.x,
             current_omega=odom_g.twist.twist.angular.z,
         )
